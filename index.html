@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Presque Stable — Coming Soon</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #05070a;
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-end;
+    pointer-events: none;
+    z-index: 10;
+    padding: 6vw;
+  }
+  .name {
+    color: #e7f1f2;
+    font-size: clamp(22px, 5vw, 46px);
+    letter-spacing: 0.14em;
+    font-weight: 200;
+    opacity: 0.95;
+    text-shadow: 0 0 22px rgba(120, 160, 180, 0.25);
+  }
+  .sub {
+    margin-top: 12px;
+    color: #9fb8c0;
+    font-size: clamp(10px, 1.3vw, 13px);
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    opacity: 0.5;
+  }
+  .vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.5) 100%);
+    z-index: 5;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="vignette"></div>
+<div class="overlay">
+  <div class="name">PRESQUE STABLE</div>
+  <div class="sub">Coming Soon</div>
+</div>
+
+<script>
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let W, H, DPR;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', () => { resize(); initGrain(); initTraces(); initWashesIfReady(); });
+function initWashesIfReady() { if (typeof initWashes === 'function' && typeof washes !== 'undefined') initWashes(); }
+resize();
+
+// ---- broad, slow-cycling background hue ----
+// Cycles gently through blue -> teal -> violet -> amber -> back, over minutes.
+function bgHue(time) {
+  return (time * 0.0006) % 360; // full cycle ~ every ~10 minutes
+}
+
+function fadeFrame(time) {
+  // very slow fade for long, soft trails
+  ctx.fillStyle = 'rgba(5, 7, 10, 0.05)';
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawBackdrop(time) {
+  const hue = bgHue(time);
+  const g = ctx.createRadialGradient(W * 0.5, H * 0.45, 0, W * 0.5, H * 0.45, Math.max(W, H) * 0.75);
+  g.addColorStop(0, `hsla(${hue}, 45%, 14%, 0.05)`);
+  g.addColorStop(1, `hsla(${(hue + 40) % 360}, 40%, 4%, 0.05)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ---- drifting color washes for richer background texture ----
+class ColorWash {
+  constructor(seed) {
+    this.seed = seed;
+    this.hueOffset = seed * 83;
+    this.speed = 0.00004 + (seed % 5) * 0.00002;
+    this.radius = Math.max(W, H) * (0.35 + (seed % 4) * 0.12);
+    this.orbitR = Math.min(W, H) * (0.2 + (seed % 3) * 0.15);
+    this.orbitSpeed = 0.00007 + (seed % 4) * 0.00003;
+    this.phase = seed * 1.9;
+  }
+  draw(time) {
+    const hue = (bgHue(time) * 1.4 + this.hueOffset) % 360;
+    const ang = time * this.orbitSpeed + this.phase;
+    const cx = W * 0.5 + Math.cos(ang) * this.orbitR;
+    const cy = H * 0.5 + Math.sin(ang * 0.8) * this.orbitR * 0.7;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, this.radius);
+    g.addColorStop(0, `hsla(${hue}, 60%, 45%, 0.05)`);
+    g.addColorStop(1, `hsla(${hue}, 60%, 45%, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+let washes = [];
+function initWashes() {
+  washes = [];
+  for (let i = 0; i < 5; i++) washes.push(new ColorWash(i * 2.3 + 1));
+}
+initWashes();
+
+// ---- evolving trace shapes: slow drift, periodic morph to new target parameters ----
+class Trace {
+  constructor(seed) {
+    this.seed = seed;
+    this.t = seed * 8;
+    this.morphEvery = 14000 + seed * 2200; // ms between big pattern shifts
+    this.lastMorph = -99999;
+    this.current = this.randomParams(seed);
+    this.target = this.randomParams(seed + 50);
+    this.points = [];
+    this.maxPoints = 300;
+    this.lineWidth = 1 + (seed % 3) * 0.35;
+    this.hueOffset = seed * 47;
+  }
+  randomParams(s) {
+    const r = (n) => {
+      const x = Math.sin(s * 999.7 + n * 37.13) * 10000;
+      return x - Math.floor(x);
+    };
+    return {
+      fx: 0.7 + r(1) * 2.4,
+      fy: 0.5 + r(2) * 2.1,
+      scale: Math.min(W, H) * (0.1 + r(3) * 0.26),
+      cx: W * (0.1 + r(4) * 0.8),
+      cy: H * (0.1 + r(5) * 0.75),
+      speed: 0.003 + r(6) * 0.0055
+    };
+  }
+  step(time) {
+    if (time - this.lastMorph > this.morphEvery) {
+      this.current = this.lerpParams(this.current, this.target, 1);
+      this.target = this.randomParams(this.seed + time * 0.00001);
+      this.lastMorph = time;
+    }
+    const morphProgress = Math.min(1, (time - this.lastMorph) / this.morphEvery);
+    const p = this.lerpParams(this.current, this.target, morphProgress);
+
+    this.t += p.speed;
+    const x = p.cx + p.scale * Math.sin(p.fx * this.t);
+    const y = p.cy + p.scale * 0.6 * Math.sin(p.fy * this.t + Math.PI / 3);
+    this.points.push({ x, y, time });
+    if (this.points.length > this.maxPoints) this.points.shift();
+  }
+  lerpParams(a, b, u) {
+    const l = (k) => a[k] + (b[k] - a[k]) * u;
+    return { fx: l('fx'), fy: l('fy'), scale: l('scale'), cx: l('cx'), cy: l('cy'), speed: l('speed') };
+  }
+  draw(time) {
+    if (this.points.length < 2) return;
+    const hue = (bgHue(time) + this.hueOffset) % 360;
+    for (let i = 1; i < this.points.length; i++) {
+      const a = (i / this.points.length) * 0.22;
+      ctx.beginPath();
+      ctx.moveTo(this.points[i - 1].x, this.points[i - 1].y);
+      ctx.lineTo(this.points[i].x, this.points[i].y);
+      ctx.strokeStyle = `hsla(${hue}, 55%, 62%, ${a})`;
+      ctx.lineWidth = this.lineWidth;
+      ctx.stroke();
+    }
+  }
+}
+
+let traces = [];
+function initTraces() {
+  traces = [];
+  for (let i = 0; i < 4; i++) traces.push(new Trace(i + 1.7));
+}
+initTraces();
+
+let grainPoints = [];
+function initGrain() {
+  grainPoints = [];
+  const n = Math.floor((W * H) / 12000);
+  for (let i = 0; i < n; i++) {
+    grainPoints.push({ x: Math.random() * W, y: Math.random() * H, a: 0.02 + Math.random() * 0.035 });
+  }
+}
+initGrain();
+
+function drawGrain() {
+  ctx.fillStyle = 'rgba(220, 232, 235, 1)';
+  for (const p of grainPoints) {
+    ctx.globalAlpha = p.a;
+    ctx.fillRect(p.x, p.y, 1, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
+ctx.fillStyle = '#05070a';
+ctx.fillRect(0, 0, W, H);
+
+let frame = 0;
+function animate(time) {
+  fadeFrame(time);
+  drawBackdrop(time);
+  washes.forEach(w => w.draw(time));
+  traces.forEach(t => { t.step(time); t.draw(time); });
+  if (frame % 3 === 0) drawGrain();
+  frame++;
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

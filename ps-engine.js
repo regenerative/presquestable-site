@@ -64,10 +64,10 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Original spectrum, weighted toward blue: five cool anchors,
-     two violet, two brief warm accents. Full colour, not brown. */
-  var PALETTE = [198, 211, 224, 240, 256, 288, 330, 22, 44, 176];
-  var ANCHOR_MS = REDUCED ? 380000 : 155000;
+  /* Full spectrum with a cool centre of gravity: teal, blue, indigo,
+     violet, magenta, rose, amber, gold, green. Morphs continuously. */
+  var PALETTE = [190, 208, 228, 252, 276, 300, 328, 348, 18, 40, 62, 150, 172];
+  var ANCHOR_MS = REDUCED ? 300000 : 118000;
   function baseHue(t) {
     var p = t / ANCHOR_MS;
     var i = Math.floor(p) % PALETTE.length;
@@ -292,9 +292,9 @@
           B = lutMid[l3 + 2] + (lutHi[l3 + 2] - lutMid[l3 + 2]) * u2;
         }
 
-        R += spec * 46; G += spec * 50; B += spec * 58;
+        R += spec * 26; G += spec * 28; B += spec * 33;
 
-        var amt = v * 0.56;
+        var amt = v * 0.30;
         R *= amt; G *= amt; B *= amt;
         fData[k++] = R > 255 ? 255 : R;
         fData[k++] = G > 255 ? 255 : G;
@@ -310,7 +310,7 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.97;
+    ctx.globalAlpha = 0.62;
     ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
@@ -392,9 +392,13 @@
     this.seed = i * 7.3 + 1.7;
     this.t = i * 11;
     this.points = [];
-    this.maxPoints = 720;
-    this.lineWidth = 1.05 + (i % 3) * 0.32;
-    this.hueOffset = i * 9 - 14;
+    this.maxPoints = 760;
+    this.lineWidth = 1.25 + (i % 3) * 0.38;
+    /* wide spread so the five lines are visibly different colours */
+    this.hueOffset = i * 67 + 24;
+    /* each line's hue also drifts on its own slow cycle */
+    this.hueDrift = 0.0000260 + (i % 4) * 0.0000115;
+    this.huePhase = i * 1.37;
     this.cur = this.randParams(this.seed);
     this.tgt = this.randParams(this.seed + 13);
     this.morphEvery = 26000 + i * 5200;
@@ -402,7 +406,8 @@
     this.mode = 'wander';
     this.wave = null;
     this.forcedType = null;
-    this.nextWaveAt = 7000 + Math.random() * 38000 + i * 6500;
+    /* first sweep comes early and they stagger, so you see one soon */
+    this.nextWaveAt = 3000 + Math.random() * 9000 + i * 7000;
   }
   Trace.prototype.randParams = function (s) {
     var r = function (n) { return rand01(s * 17.3 + n * 5.11); };
@@ -423,8 +428,9 @@
       speed: lerp(a.speed, b.speed, u)
     };
   };
+  /* guaranteed under 60s: 16-52s between sweeps */
   Trace.prototype.schedule = function (time) {
-    this.nextWaveAt = time + 26000 + Math.random() * 44000;
+    this.nextWaveAt = time + 16000 + Math.random() * 36000;
   };
   Trace.prototype.startWave = function (time, type) {
     type = type || this.forcedType || WAVE_TYPES[(Math.random() * WAVE_TYPES.length) | 0];
@@ -432,10 +438,12 @@
     this.mode = 'wave';
     this.wave = {
       type: type, start: time,
-      dur: 6000 + Math.random() * 4200,
-      cycles: 3 + ((Math.random() * 6) | 0),
-      amp: H * (0.042 + Math.random() * 0.085),
-      baseY: H * (0.15 + Math.random() * 0.70)
+      dur: 7000 + Math.random() * 4500,
+      /* random frequency: 2 to 12 cycles across the screen */
+      cycles: 2 + ((Math.random() * 11) | 0),
+      /* large enough to read clearly */
+      amp: H * (0.075 + Math.random() * 0.135),
+      baseY: H * (0.20 + Math.random() * 0.60)
     };
     maybeBuddy(this, time, type);
   };
@@ -448,8 +456,11 @@
     if (this.mode === 'wander' && !REDUCED && time >= this.nextWaveAt) this.startWave(time);
     var sub = (this.mode === 'wave') ? 3 : 1;
     for (var s = 1; s <= sub; s++) this.sample(time - dt + dt * s / sub, dt / sub);
-    if (this.points.length > this.maxPoints + 64) {
-      this.points.splice(0, this.points.length - this.maxPoints);
+    /* during a sweep the trail must be long enough to span the whole
+       screen, or the waveform gets truncated before it reaches the edge */
+    var cap = (this.mode === 'wave') ? 2600 : this.maxPoints;
+    if (this.points.length > cap + 64) {
+      this.points.splice(0, this.points.length - cap);
     }
   };
   Trace.prototype.sample = function (time, sdt) {
@@ -465,9 +476,10 @@
       if (uu >= 1) {
         this.mode = 'wander'; this.wave = null; this.schedule(time);
       } else {
-        var qx = -0.12 * W + uu * 1.24 * W;
+        var qx = -0.14 * W + uu * 1.28 * W;
         var qy = w.baseY + w.amp * waveValue(w.type, uu * w.cycles * TAU, this.seed);
-        var edge = smoothstep(Math.min(uu / 0.12, (1 - uu) / 0.12));
+        /* tight crossfade: the shape is pure for ~88% of the sweep */
+        var edge = smoothstep(Math.min(uu / 0.06, (1 - uu) / 0.06));
         x = lerp(wx, qx, edge);
         y = lerp(wy, qy, edge);
       }
@@ -477,13 +489,17 @@
   Trace.prototype.draw = function (time) {
     var pts = this.points;
     if (pts.length < 3) return;
-    var hue = (baseHue(time) + this.hueOffset) % 360;
-    var BANDS = 14;
+    /* own hue: wide offset from base, plus an independent slow drift */
+    var hue = (baseHue(time) + this.hueOffset +
+               42 * Math.sin(time * this.hueDrift + this.huePhase) + 720) % 360;
+    var isWave = (this.mode === 'wave');
+    var BANDS = isWave ? 22 : 14;
     var per = Math.max(2, Math.floor(pts.length / BANDS));
-    var boost = (this.mode === 'wave') ? 1.6 : 1;
+    var boost = isWave ? 2.3 : 1;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
+    /* dark underdraw for separation from the lattice */
     for (var b = 0; b < BANDS; b++) {
       var s0 = b * per;
       var e0 = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s0 + per + 1);
@@ -492,21 +508,39 @@
       ctx.beginPath();
       ctx.moveTo(pts[s0].x, pts[s0].y);
       for (var i0 = s0 + 1; i0 < e0; i0++) ctx.lineTo(pts[i0].x, pts[i0].y);
-      ctx.strokeStyle = 'rgba(4,7,12,' + (0.030 + 0.115 * k0 * k0 * boost).toFixed(4) + ')';
-      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k0) + 2.4;
+      ctx.strokeStyle = 'rgba(3,5,10,' + (0.055 + 0.235 * k0 * k0 * boost).toFixed(4) + ')';
+      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k0) + 3.0;
       ctx.stroke();
     }
+
+    /* coloured glow */
+    for (var b1 = 0; b1 < BANDS; b1++) {
+      var s1 = b1 * per;
+      var e1 = (b1 === BANDS - 1) ? pts.length : Math.min(pts.length, s1 + per + 1);
+      if (e1 - s1 < 2) continue;
+      var k1 = (b1 + 1) / BANDS;
+      ctx.beginPath();
+      ctx.moveTo(pts[s1].x, pts[s1].y);
+      for (var i1 = s1 + 1; i1 < e1; i1++) ctx.lineTo(pts[i1].x, pts[i1].y);
+      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 92%, 60%, ' +
+                        (0.030 + 0.185 * k1 * k1 * boost).toFixed(4) + ')';
+      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k1) + 2.2;
+      ctx.stroke();
+    }
+
+    /* bright saturated core */
     for (var b2 = 0; b2 < BANDS; b2++) {
       var s = b2 * per;
       var e = (b2 === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
       if (e - s < 2) continue;
       var k = (b2 + 1) / BANDS;
-      var a = 0.030 + 0.210 * k * k * boost;
+      var a = 0.075 + 0.680 * k * k * boost;
+      if (a > 1) a = 1;
       ctx.beginPath();
       ctx.moveTo(pts[s].x, pts[s].y);
       for (var i = s + 1; i < e; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 58%, 88%, ' + a.toFixed(4) + ')';
-      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k);
+      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 86%, 78%, ' + a.toFixed(4) + ')';
+      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k) * (isWave ? 1.45 : 1);
       ctx.stroke();
     }
   };

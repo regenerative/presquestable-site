@@ -587,6 +587,21 @@
     /* keep-out box for the rotating structure, in screen space */
     moleculeBox: moleculeBox,
 
+    /* Very slight random tilt. Generated once per element per load and
+       cached, so a resize never re-rolls it (that would read as a
+       glitch). Applied after placement, so collision maths stays exact. */
+    tilt: function (el, maxDeg) {
+      if (!el) return;
+      if (el.dataset.tilt === undefined) {
+        var m = (maxDeg == null) ? 0.6 : maxDeg;
+        var d = (Math.random() * 2 - 1) * m;
+        /* keep it off dead-centre so the tilt is always perceptible */
+        if (Math.abs(d) < m * 0.32) d = (d < 0 ? -1 : 1) * m * 0.32;
+        el.dataset.tilt = d.toFixed(3);
+      }
+      el.style.transform = 'rotate(' + el.dataset.tilt + 'deg)';
+    },
+
     placeRandom: function (el, opts) {
       if (!el) return;
       opts = opts || {};

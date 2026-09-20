@@ -55,6 +55,8 @@
     if (!window.PS) return;
     note.style.opacity = '0';
     note.style.textAlign = 'left';
+    /* measure untilted; the cached angle is re-applied at the end */
+    note.style.transform = 'none';
     PS.placeRandom(note, {
       avoid: [name, PS.moleculeBox(), link],
       marginX: 0.05, marginY: 0.10, pad: 46
@@ -68,6 +70,8 @@
     } else {
       note.style.textAlign = 'left';
     }
+    /* tilt last — measurement above must be on an untilted box */
+    PS.tilt(note, 0.5);
   }
 
   /* Engine reports hover strength each frame. */
@@ -79,6 +83,8 @@
     if (done || !window.PS) return;
     done = true;
     PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
+    PS.tilt(link, 0.6);
+    PS.tilt(document.querySelector('.copyright'), 0.5);
     placeNote();
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { link.classList.add('ready'); });

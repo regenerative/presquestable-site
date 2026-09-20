@@ -101,6 +101,8 @@ html, body {
   animation: breathe 7s ease-in-out infinite;
 }
 
+.releases { transform-origin: 50% 50%; }
+
 .releases .word {
   font-size: clamp(13px, 1.5vw, 17px);
   font-weight: 600;
@@ -151,6 +153,7 @@ html, body {
   right: 2.2vw;
   bottom: 1.8vh;
   z-index: 15;
+  transform-origin: 100% 50%;
   color: #cfdcea;
   font-size: clamp(9px, 0.82vw, 11px);
   font-weight: 400;
@@ -189,6 +192,8 @@ html, body {
 }
 
 .annotation span { display: block; }
+
+.annotation, .soon { transform-origin: 50% 50%; }
 
 .annotation .dim { opacity: 0.62; }
 

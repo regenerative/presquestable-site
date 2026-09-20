@@ -35,6 +35,8 @@
     if (done || !window.PS) return;
     done = true;
     PS.placeRandom(soon, { avoid: avoidList(), marginX: 0.12, marginY: 0.16, pad: 70 });
+    PS.tilt(soon, 0.5);
+    PS.tilt(document.querySelector('.copyright'), 0.5);
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { soon.classList.add('ready'); });
     });

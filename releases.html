@@ -24,10 +24,15 @@
   var done = false;
 
   /* Positioned once while invisible, then faded in. Never jumps. */
+  /* keep clear of the rotating structure at centre screen */
+  function avoidList() {
+    return [PS.moleculeBox()];
+  }
+
   function placeOnce() {
     if (done || !window.PS) return;
     done = true;
-    PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
+    PS.placeRandom(soon, { avoid: avoidList(), marginX: 0.12, marginY: 0.16, pad: 70 });
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { soon.classList.add('ready'); });
     });
@@ -45,7 +50,7 @@
   window.addEventListener('resize', function () {
     clearTimeout(t);
     t = setTimeout(function () {
-      if (window.PS) PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
+      if (window.PS) PS.placeRandom(soon, { avoid: avoidList(), marginX: 0.12, marginY: 0.16, pad: 70 });
     }, 220);
   });
 

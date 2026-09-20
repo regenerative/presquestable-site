@@ -240,11 +240,36 @@
   var order = [];      /* reusable index array for depth sort   */
   var px_ = [], py_ = [], pz_ = [], pf_ = [];
 
+  /* Neutral throughout — no element colour coding. Vertices are
+     small pale markers; the wireframe carries the structure. */
   var ELEMENTS = {
-    Ca: { rad: 0.56, h: 205, s: 32, l: 60 },
-    C:  { rad: 0.30, h: 216, s: 10, l: 34 },
-    O:  { rad: 0.38, h: 6,   s: 62, l: 51 }
+    Ca: { rad: 0.56, h: 210, s: 7, l: 80 },
+    C:  { rad: 0.30, h: 210, s: 7, l: 62 },
+    O:  { rad: 0.38, h: 210, s: 7, l: 71 }
   };
+
+  /* Single source of truth for where the structure sits, so the
+     text-placement logic can keep clear of it. */
+  function MOL_CX() { return W * 0.5; }
+  function MOL_CY() { return H * 0.46; }
+
+  /* Scales with the short edge, but eased down on square or small
+     viewports where a large centred object leaves no room for text. */
+  function MOL_SIZE() {
+    var m = Math.min(W, H);
+    var aspect = Math.max(W, H) / m;          /* 1 = square */
+    var f = 0.21 - 0.045 * smoothstep((1.45 - aspect) / 0.45);
+    if (m < 820) f *= 0.88;
+    return m * f;
+  }
+
+  /* Screen-space keep-out box. Perspective can push a near atom a
+     little beyond `size`, so pad by 12%. */
+  function moleculeBox() {
+    var r = MOL_SIZE() * 1.12;
+    var cx = MOL_CX(), cy = MOL_CY();
+    return { left: cx - r, right: cx + r, top: cy - r, bottom: cy + r };
+  }
 
   function buildMolecule() {
     var a = 4.99, c = 17.06, SQ3 = 0.8660254, oBond = 1.284;
@@ -387,8 +412,8 @@
     var cX = Math.cos(rx), sX = Math.sin(rx);
     var cZ = Math.cos(rz), sZ = Math.sin(rz);
 
-    var cx = W * 0.5, cy = H * 0.46;
-    var size = Math.min(W, H) * 0.21;
+    var cx = MOL_CX(), cy = MOL_CY();
+    var size = MOL_SIZE();
     var scale = size / MOL_R;
     var camD = 3.4;
     var i, a;
@@ -418,9 +443,9 @@
       var ia = bd.a, ib = bd.b;
       var near = 0.5 - 0.25 * ((pz_[ia] + pz_[ib]) / MOL_R);
       if (near < 0) near = 0; else if (near > 1) near = 1;
-      var al = bd.co ? (0.10 + 0.24 * near) : (0.020 + 0.055 * near);
-      ctx.strokeStyle = 'rgba(206,222,238,' + al.toFixed(4) + ')';
-      ctx.lineWidth = (bd.co ? 1.5 : 0.6) * (0.65 + 0.5 * near);
+      var al = bd.co ? (0.22 + 0.46 * near) : (0.055 + 0.135 * near);
+      ctx.strokeStyle = 'rgba(214,228,242,' + al.toFixed(4) + ')';
+      ctx.lineWidth = (bd.co ? 2.0 : 0.95) * (0.65 + 0.5 * near);
       ctx.beginPath();
       ctx.moveTo(px_[ia], py_[ia]);
       ctx.lineTo(px_[ib], py_[ib]);
@@ -434,11 +459,12 @@
       i = order[k];
       a = ATOMS[i];
       var e = ELEMENTS[a.el];
-      var r = e.rad * scale * pf_[i] * 0.62;
-      if (r < 0.4) continue;
+      /* small vertex markers, ~40% of the previous sphere size */
+      var r = e.rad * scale * pf_[i] * 0.25;
+      if (r < 0.3) continue;
       var nz = 0.5 - 0.5 * (pz_[i] / MOL_R);
       if (nz < 0) nz = 0; else if (nz > 1) nz = 1;
-      ctx.globalAlpha = 0.30 + 0.56 * nz;
+      ctx.globalAlpha = 0.34 + 0.54 * nz;
       var s2 = r * 2;
       ctx.drawImage(sprites[a.el], px_[i] - r, py_[i] - r, s2, s2);
     }
@@ -519,39 +545,77 @@
 
   /* ---------- random placement ---------- */
   window.PS = {
+    /* keep-out box for the rotating structure, in screen space */
+    moleculeBox: moleculeBox,
+
     placeRandom: function (el, opts) {
       if (!el) return;
       opts = opts || {};
-      var mx = opts.marginX != null ? opts.marginX : 0.10;
-      var my = opts.marginY != null ? opts.marginY : 0.12;
+      var basePad = opts.pad != null ? opts.pad : 34;
       var avoid = opts.avoid || [];
-      var pad = opts.pad != null ? opts.pad : 34;
       var vw = window.innerWidth, vh = window.innerHeight;
       var r = el.getBoundingClientRect();
       var w = r.width || 150, h = r.height || 22;
-      var availW = Math.max(10, vw * (1 - mx * 2) - w);
-      var availH = Math.max(10, vh * (1 - my * 2) - h);
-      var best = null, bestScore = -Infinity;
-      for (var n = 0; n < 300; n++) {
-        var x = vw * mx + Math.random() * availW;
-        var y = vh * my + Math.random() * availH;
-        var ok = true, worst = Infinity;
-        for (var i = 0; i < avoid.length; i++) {
-          var a = avoid[i];
-          if (!a) continue;
-          var ar = a.getBoundingClientRect();
-          var ox = Math.min(x + w, ar.right + pad) - Math.max(x, ar.left - pad);
-          var oy = Math.min(y + h, ar.bottom + pad) - Math.max(y, ar.top - pad);
-          if (ox > 0 && oy > 0) { ok = false; break; }
-          worst = Math.min(worst, Math.max(-ox, -oy));
+
+      /* normalise avoid entries once */
+      var boxes = [];
+      for (var i = 0; i < avoid.length; i++) {
+        var a = avoid[i];
+        if (!a) continue;
+        boxes.push((typeof a.getBoundingClientRect === 'function')
+                   ? a.getBoundingClientRect() : a);
+      }
+
+      function attempt(mx, my, pad, tries) {
+        var availW = Math.max(10, vw * (1 - mx * 2) - w);
+        var availH = Math.max(10, vh * (1 - my * 2) - h);
+        for (var n = 0; n < tries; n++) {
+          var x = vw * mx + Math.random() * availW;
+          var y = vh * my + Math.random() * availH;
+          var ok = true;
+          for (var j = 0; j < boxes.length; j++) {
+            var b = boxes[j];
+            var ox = Math.min(x + w, b.right + pad) - Math.max(x, b.left - pad);
+            var oy = Math.min(y + h, b.bottom + pad) - Math.max(y, b.top - pad);
+            if (ox > 0 && oy > 0) { ok = false; break; }
+          }
+          if (ok) return { x: x, y: y };
         }
-        if (ok) { el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(y) + 'px'; return; }
-        if (worst > bestScore) { bestScore = worst; best = { x: x, y: y }; }
+        return null;
       }
-      if (best) {
-        el.style.left = Math.round(best.x) + 'px';
-        el.style.top = Math.round(best.y) + 'px';
+
+      var mx0 = opts.marginX != null ? opts.marginX : 0.10;
+      var my0 = opts.marginY != null ? opts.marginY : 0.12;
+
+      /* Relax breathing room, then margins, before ever accepting an
+         overlap. Guarantees the text stays clear of the structure. */
+      var ladder = [
+        [mx0, my0, basePad, 240],
+        [mx0, my0, basePad * 0.55, 200],
+        [mx0 * 0.6, my0 * 0.6, basePad * 0.55, 200],
+        [mx0 * 0.6, my0 * 0.6, basePad * 0.25, 200],
+        [0.035, 0.045, 8, 260],
+        [0.02, 0.025, 0, 320]
+      ];
+      for (var s = 0; s < ladder.length; s++) {
+        var hit = attempt(ladder[s][0], ladder[s][1], ladder[s][2], ladder[s][3]);
+        if (hit) {
+          el.style.left = Math.round(hit.x) + 'px';
+          el.style.top = Math.round(hit.y) + 'px';
+          return;
+        }
       }
+
+      /* Last resort: corner furthest from the first keep-out box. */
+      var fx = 0.03 * vw, fy = 0.03 * vh;
+      if (boxes.length) {
+        var b0 = boxes[0];
+        var ccx = (b0.left + b0.right) / 2, ccy = (b0.top + b0.bottom) / 2;
+        fx = (ccx > vw / 2) ? 0.03 * vw : vw - w - 0.03 * vw;
+        fy = (ccy > vh / 2) ? 0.04 * vh : vh - h - 0.04 * vh;
+      }
+      el.style.left = Math.round(fx) + 'px';
+      el.style.top = Math.round(fy) + 'px';
     }
   };
 

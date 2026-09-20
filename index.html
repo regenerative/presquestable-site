@@ -33,10 +33,15 @@
 
   /* Positioned exactly once, while still invisible, then faded in.
      The element never moves after it becomes visible. */
+  /* avoid the wordmark and the rotating structure at centre screen */
+  function avoidList() {
+    return [name, PS.moleculeBox()];
+  }
+
   function placeOnce() {
     if (done || !window.PS) return;
     done = true;
-    PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 90 });
+    PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { link.classList.add('ready'); });
     });
@@ -57,7 +62,7 @@
   window.addEventListener('resize', function () {
     clearTimeout(t);
     t = setTimeout(function () {
-      if (window.PS) PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 90 });
+      if (window.PS) PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
     }, 220);
   });
 })();

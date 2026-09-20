@@ -15,12 +15,11 @@
   var W = 0, H = 0, DPR = 1;
   var TAU = Math.PI * 2;
 
-  /* ---------- maths helpers ---------- */
+  /* ---------- maths ---------- */
   function smoothstep(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); return t * t * (3 - 2 * t); }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function rand01(n) { var x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
-  /* ---------- 3-D value noise (integer hash) ---------- */
   function hash3(ix, iy, iz) {
     var h = Math.imul(ix, 1597334677) ^ Math.imul(iy, 668265263) ^ Math.imul(iz, 374761393);
     h = Math.imul(h ^ (h >>> 15), 2246822519);
@@ -30,16 +29,19 @@
   function vnoise(x, y, z) {
     var ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
     var fx = smoothstep(x - ix), fy = smoothstep(y - iy), fz = smoothstep(z - iz);
-    var x00 = lerp(hash3(ix, iy, iz), hash3(ix + 1, iy, iz), fx);
-    var x10 = lerp(hash3(ix, iy + 1, iz), hash3(ix + 1, iy + 1, iz), fx);
-    var x01 = lerp(hash3(ix, iy, iz + 1), hash3(ix + 1, iy, iz + 1), fx);
-    var x11 = lerp(hash3(ix, iy + 1, iz + 1), hash3(ix + 1, iy + 1, iz + 1), fx);
-    return lerp(lerp(x00, x10, fy), lerp(x01, x11, fy), fz);
+    var a = lerp(hash3(ix, iy, iz), hash3(ix + 1, iy, iz), fx);
+    var b = lerp(hash3(ix, iy + 1, iz), hash3(ix + 1, iy + 1, iz), fx);
+    var c = lerp(hash3(ix, iy, iz + 1), hash3(ix + 1, iy, iz + 1), fx);
+    var d = lerp(hash3(ix, iy + 1, iz + 1), hash3(ix + 1, iy + 1, iz + 1), fx);
+    return lerp(lerp(a, b, fy), lerp(c, d, fy), fz);
   }
-  function fbm(x, y, z, oct) {
-    var v = 0, a = 0.5, f = 1;
-    for (var i = 0; i < oct; i++) { v += a * vnoise(x * f, y * f, z * f); f *= 2.02; a *= 0.5; }
-    return v;
+  function fbm2(x, y, z) {
+    return 0.5 * vnoise(x, y, z) + 0.25 * vnoise(x * 2.03, y * 2.03, z * 1.4);
+  }
+  function fbm3(x, y, z) {
+    return 0.5 * vnoise(x, y, z) +
+           0.25 * vnoise(x * 2.03, y * 2.03, z * 1.4) +
+           0.125 * vnoise(x * 4.11, y * 4.11, z * 1.9);
   }
 
   /* ---------- colour ---------- */
@@ -59,10 +61,9 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Cold palette: teal -> cyan -> steel -> blue -> indigo -> cold violet.
-     Never crosses into warm territory. */
-  var PALETTE = [172, 186, 197, 208, 217, 228, 246, 262];
-  var ANCHOR_MS = REDUCED ? 420000 : 170000;   /* full loop ~20 min */
+  /* Cold only: teal -> cyan -> steel -> blue -> indigo -> cold violet */
+  var PALETTE = [174, 187, 196, 206, 214, 226, 242, 258];
+  var ANCHOR_MS = REDUCED ? 460000 : 190000;
   function baseHue(t) {
     var p = t / ANCHOR_MS;
     var i = Math.floor(p) % PALETTE.length;
@@ -72,146 +73,158 @@
     return (a + d * smoothstep(p - Math.floor(p)) + 360) % 360;
   }
 
-  /* ---------- LAYER 1: morphing cloud texture (large scale) ----------
-     Ridged turbulence gives visible veining instead of a flat gradient. */
-  var NW = 176, NH = 99, nCanvas = null, nCtx = null, nImg = null;
+  /* ============================================================
+     ORGANIC FIELD
+     Domain-warped fBm: the field is sampled through a position
+     that is itself displaced by noise. That is what produces
+     marbled, fibrous, living structure instead of blobs.
+     The field never translates — it only evolves on its own
+     internal axis, so nothing appears to slide anywhere.
+     ============================================================ */
+  var FW = 168, FH = 95;
+  var fCanvas = null, fCtx = null, fImg = null;
+  var strip = 0, STRIPS = 3;
+  var renderT = 0;
 
-  function initNoise() {
-    NH = Math.max(64, Math.round(NW * (H / Math.max(1, W))));
-    nCanvas = document.createElement('canvas');
-    nCanvas.width = NW; nCanvas.height = NH;
-    nCtx = nCanvas.getContext('2d');
-    nImg = nCtx.createImageData(NW, NH);
-    var d = nImg.data;
+  function initField() {
+    FH = Math.max(60, Math.round(FW * (H / Math.max(1, W))));
+    fCanvas = document.createElement('canvas');
+    fCanvas.width = FW; fCanvas.height = FH;
+    fCtx = fCanvas.getContext('2d');
+    fImg = fCtx.createImageData(FW, FH);
+    var d = fImg.data;
     for (var i = 3; i < d.length; i += 4) d[i] = 255;
-    renderNoise(0);
+    for (var s = 0; s < STRIPS; s++) renderStrip(0, s);
+    fCtx.putImageData(fImg, 0, 0);
   }
 
-  function renderNoise(time) {
-    if (!nImg) return;
-    var d = nImg.data, k = 0;
+  function renderStrip(time, s) {
+    if (!fImg) return;
+    var d = fImg.data;
+    var zs = REDUCED ? 0.3 : 1;
+
+    /* three independent evolution axes — no x/y translation anywhere */
+    var z1 = time * 0.0000205 * zs;
+    var z2 = time * 0.0000142 * zs + 53.7;
+    var z3 = time * 0.0000271 * zs + 128.3;
+
     var hue = baseHue(time);
-    var c1 = hsl2rgb(hue - 8, 0.42, 0.58);
-    var c2 = hsl2rgb(hue + 30, 0.38, 0.54);
-    var zs = REDUCED ? 0.35 : 1;
-    var z1 = time * 0.000040 * zs;
-    var z2 = time * 0.000027 * zs + 37;
-    var z3 = time * 0.000063 * zs + 91;
-    var dx = time * 0.0000058 * zs;
-    var dy = time * 0.0000036 * zs;
+    var cDeep = hsl2rgb(hue + 16, 0.50, 0.30);
+    var cMid  = hsl2rgb(hue - 6,  0.40, 0.56);
+    var cHi   = hsl2rgb(hue - 20, 0.28, 0.78);
 
-    for (var y = 0; y < NH; y++) {
-      var ny = (y / NH) * 3.4 + dy;
-      for (var x = 0; x < NW; x++) {
-        var nx = (x / NW) * 4.8 + dx;
+    var y0 = Math.floor(FH * s / STRIPS);
+    var y1 = Math.floor(FH * (s + 1) / STRIPS);
 
-        var a = fbm(nx, ny, z1, 3);
-        var b = fbm(nx * 1.9 + 4.7, ny * 1.9 - 3.1, z2, 2);
+    for (var y = y0; y < y1; y++) {
+      var py = (y / FH) * 3.0;
+      var k = (y * FW) * 4;
+      for (var x = 0; x < FW; x++) {
+        var px = (x / FW) * 5.3;
 
-        /* ridged: folds the field so it forms veins, not blobs */
-        var r = 1 - Math.abs(vnoise(nx * 3.3 + 11.2, ny * 3.3 - 7.4, z3) * 2 - 1);
-        r = r * r;
+        /* --- first warp --- */
+        var q1 = fbm3(px, py, z1);
+        var q2 = fbm3(px + 5.2, py + 1.3, z1);
 
-        var v = a * 0.46 + b * 0.26 + r * 0.28;
+        /* --- second warp, fed by the first --- */
+        var wx = px + 3.4 * q1;
+        var wy = py + 3.4 * q2;
+        var r1 = fbm2(wx + 1.7, wy + 9.2, z2);
+        var r2 = fbm2(wx + 8.3, wy + 2.8, z2);
 
-        /* hard contrast window — this is what makes it read as texture */
-        v = (v - 0.40) / 0.30;
+        /* --- final sample through the doubly-warped position --- */
+        var ax = px + 2.6 * r1;
+        var ay = py + 2.6 * r2;
+        var v = fbm3(ax, ay, z3);
+
+        /* fibre: thin filaments through the warped field */
+        var fib = 1 - Math.abs(vnoise(ax * 2.6, ay * 2.6, z3 * 1.3) * 2 - 1);
+        fib = fib * fib * fib;
+
+        v = v * 0.80 + fib * 0.20;
+
+        /* gentle contrast — enough to see structure, not posterised */
+        v = (v - 0.30) / 0.40;
         v = v < 0 ? 0 : (v > 1 ? 1 : v);
         v = v * v * (3 - 2 * v);
-        v *= 0.52;
 
-        var mix = b * 0.6 + r * 0.4;
-        d[k++] = (c1[0] + (c2[0] - c1[0]) * mix) * v;
-        d[k++] = (c1[1] + (c2[1] - c1[1]) * mix) * v;
-        d[k++] = (c1[2] + (c2[2] - c1[2]) * mix) * v;
+        /* three-stop ramp reads as depth rather than a flat tint */
+        var R, G, B;
+        if (v < 0.55) {
+          var u = v / 0.55;
+          R = cDeep[0] + (cMid[0] - cDeep[0]) * u;
+          G = cDeep[1] + (cMid[1] - cDeep[1]) * u;
+          B = cDeep[2] + (cMid[2] - cDeep[2]) * u;
+        } else {
+          var u2 = (v - 0.55) / 0.45;
+          R = cMid[0] + (cHi[0] - cMid[0]) * u2;
+          G = cMid[1] + (cHi[1] - cMid[1]) * u2;
+          B = cMid[2] + (cHi[2] - cMid[2]) * u2;
+        }
+
+        /* warp vector tints the colour — organic variation, not uniform */
+        var tint = (r1 - r2) * 0.5;
+        R *= (1 - tint * 0.22);
+        B *= (1 + tint * 0.22);
+
+        var amt = v * 0.60;
+        d[k++] = R * amt;
+        d[k++] = G * amt;
+        d[k++] = B * amt;
         k++;
       }
     }
-    nCtx.putImageData(nImg, 0, 0);
   }
 
-  function drawNoise() {
-    if (!nCanvas) return;
+  function drawField() {
+    if (!fCanvas) return;
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.95;
-    ctx.drawImage(nCanvas, 0, 0, W, H);
-    /* second pass at 2.1x, offset — adds mid-frequency detail */
-    ctx.globalAlpha = 0.30;
-    ctx.drawImage(nCanvas, -W * 0.28, -H * 0.22, W * 2.1, H * 2.1);
+    ctx.globalAlpha = 0.97;
+    ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
 
-  /* ---------- LAYER 2: film grain tile (pixel scale) ----------
-     Three pre-rendered tiles cycled + drifted on integer pixels, so the
-     surface shimmers like film stock and never resamples to mush. */
-  var TILE = 220, grainTiles = [], tileIdx = 0;
-
-  function buildGrainTiles() {
-    grainTiles = [];
-    for (var t = 0; t < 3; t++) {
-      var c = document.createElement('canvas');
-      c.width = TILE; c.height = TILE;
-      var g = c.getContext('2d');
-      var img = g.createImageData(TILE, TILE);
-      var d = img.data, k = 0;
-      for (var y = 0; y < TILE; y++) {
-        for (var x = 0; x < TILE; x++) {
-          /* clumping mask stops it looking like TV static */
-          var clump = vnoise(x * 0.075, y * 0.075, t * 13.7) * 0.55 +
-                      vnoise(x * 0.21, y * 0.21, t * 5.3 + 2) * 0.45;
-          var w = Math.random();
-          var v = w * (0.30 + clump * 0.95);
-          v = v * v * v;
-          var lum = v * 132;
-          d[k++] = lum * 0.86;
-          d[k++] = lum * 0.96;
-          d[k++] = lum;          /* cool-biased grain */
-          d[k++] = 255;
-        }
-      }
-      g.putImageData(img, 0, 0);
-      grainTiles.push(c);
+  /* ---------- static speckle ----------
+     Fixed positions. Never moves, never scrolls. Only breathes
+     very slightly in brightness, like emulsion. */
+  var speck = [];
+  function initSpeck() {
+    speck = [];
+    var n = Math.floor((W * H) / 2600);
+    for (var i = 0; i < n; i++) {
+      speck.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        a: 0.010 + Math.random() * Math.random() * 0.055,
+        ph: Math.random() * TAU,
+        sp: 0.00018 + Math.random() * 0.00042
+      });
     }
   }
-
-  function drawGrainTile(time) {
-    if (!grainTiles.length) return;
-    var tile = grainTiles[tileIdx];
-    var ox = -((Math.round(time * 0.009) % TILE) + TILE) % TILE;
-    var oy = -((Math.round(time * 0.006) % TILE) + TILE) % TILE;
+  function drawSpeck(time) {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = REDUCED ? 0.22 : 0.40;
-    ctx.imageSmoothingEnabled = false;
-    for (var x = ox; x < W; x += TILE) {
-      for (var y = oy; y < H; y += TILE) ctx.drawImage(tile, x, y);
+    ctx.fillStyle = 'rgb(206,226,236)';
+    for (var i = 0; i < speck.length; i++) {
+      var p = speck[i];
+      ctx.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(time * p.sp + p.ph));
+      ctx.fillRect(p.x, p.y, 1, 1);
     }
     ctx.restore();
   }
 
-  /* ---------- LAYER 3: fine striation ---------- */
-  function drawStriation(time) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = 0.030;
-    ctx.fillStyle = 'rgb(150,182,196)';
-    var off = (time * 0.0035) % 3;
-    for (var y = off; y < H; y += 3) ctx.fillRect(0, y, W, 1);
-    ctx.restore();
-  }
-
-  /* ---------- drifting colour washes ---------- */
+  /* ---------- drifting washes ---------- */
   function ColorWash(seed) {
-    this.hueOffset = (seed % 4) * 15 - 22;   /* stays inside the cold band */
-    this.radius = Math.max(W, H) * (0.34 + (seed % 4) * 0.13);
-    this.orbitR = Math.min(W, H) * (0.16 + (seed % 3) * 0.17);
-    this.orbitSpeed = (0.000034 + (seed % 5) * 0.000017) * (REDUCED ? 0.3 : 1);
+    this.hueOffset = (seed % 4) * 13 - 19;
+    this.radius = Math.max(W, H) * (0.36 + (seed % 4) * 0.13);
+    this.orbitR = Math.min(W, H) * (0.15 + (seed % 3) * 0.16);
+    this.orbitSpeed = (0.000029 + (seed % 5) * 0.000014) * (REDUCED ? 0.3 : 1);
     this.phase = seed * 1.7;
     this.wobble = 0.55 + (seed % 3) * 0.2;
-    this.alpha = 0.030 + (seed % 3) * 0.010;
+    this.alpha = 0.026 + (seed % 3) * 0.009;
   }
   ColorWash.prototype.draw = function (t) {
     var hue = (baseHue(t) + this.hueOffset) % 360;
@@ -220,22 +233,20 @@
     var cy = H * 0.5 + Math.sin(ang * this.wobble) * this.orbitR * 0.75;
     var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, this.radius);
     var h = hue.toFixed(1);
-    g.addColorStop(0, 'hsla(' + h + ', 62%, 46%, ' + this.alpha.toFixed(4) + ')');
-    g.addColorStop(0.55, 'hsla(' + h + ', 62%, 40%, ' + (this.alpha * 0.4).toFixed(4) + ')');
-    g.addColorStop(1, 'hsla(' + h + ', 62%, 36%, 0)');
+    g.addColorStop(0, 'hsla(' + h + ', 58%, 46%, ' + this.alpha.toFixed(4) + ')');
+    g.addColorStop(0.55, 'hsla(' + h + ', 58%, 40%, ' + (this.alpha * 0.4).toFixed(4) + ')');
+    g.addColorStop(1, 'hsla(' + h + ', 58%, 36%, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   };
-
   var washes = [];
   function initWashes() {
     washes = [];
-    for (var i = 0; i < 6; i++) washes.push(new ColorWash(i * 2.3 + 1));
+    for (var i = 0; i < 5; i++) washes.push(new ColorWash(i * 2.3 + 1));
   }
 
-  /* ---------- synthesis waveforms ---------- */
+  /* ---------- waveforms ---------- */
   var WAVE_TYPES = ['sine', 'triangle', 'saw', 'ramp', 'square', 'pulse', 'sh'];
-
   function waveValue(type, phase, seed) {
     var p = ((phase % TAU) + TAU) % TAU;
     var u = p / TAU;
@@ -253,13 +264,12 @@
 
   /* ---------- traces ---------- */
   function Trace(i) {
-    this.i = i;
     this.seed = i * 7.3 + 1.7;
     this.t = i * 11;
     this.points = [];
     this.maxPoints = 720;
     this.lineWidth = 0.85 + (i % 3) * 0.28;
-    this.hueOffset = i * 11 - 18;
+    this.hueOffset = i * 10 - 16;
     this.cur = this.randParams(this.seed);
     this.tgt = this.randParams(this.seed + 13);
     this.morphEvery = 26000 + i * 5200;
@@ -269,7 +279,6 @@
     this.forcedType = null;
     this.nextWaveAt = 7000 + Math.random() * 38000 + i * 6500;
   }
-
   Trace.prototype.randParams = function (s) {
     var r = function (n) { return rand01(s * 17.3 + n * 5.11); };
     return {
@@ -278,11 +287,9 @@
       scale: Math.min(W, H) * (0.10 + r(3) * 0.26),
       cx: W * (0.12 + r(4) * 0.76),
       cy: H * (0.14 + r(5) * 0.70),
-      /* ~45% slower than before */
       speed: (0.0016 + r(6) * 0.0032) * (REDUCED ? 0.4 : 1)
     };
   };
-
   Trace.prototype.lerpParams = function (a, b, u) {
     return {
       fx: lerp(a.fx, b.fx, u), fy: lerp(a.fy, b.fy, u),
@@ -291,11 +298,9 @@
       speed: lerp(a.speed, b.speed, u)
     };
   };
-
   Trace.prototype.schedule = function (time) {
     this.nextWaveAt = time + 26000 + Math.random() * 44000;
   };
-
   Trace.prototype.startWave = function (time, type) {
     type = type || this.forcedType || WAVE_TYPES[(Math.random() * WAVE_TYPES.length) | 0];
     this.forcedType = null;
@@ -310,7 +315,6 @@
     };
     maybeBuddy(this, time, type);
   };
-
   Trace.prototype.update = function (time, dt) {
     if (time - this.lastMorph > this.morphEvery) {
       this.cur = this.lerpParams(this.cur, this.tgt, 1);
@@ -324,7 +328,6 @@
       this.points.splice(0, this.points.length - this.maxPoints);
     }
   };
-
   Trace.prototype.sample = function (time, sdt) {
     var mu = smoothstep(Math.min(1, (time - this.lastMorph) / this.morphEvery));
     var p = this.lerpParams(this.cur, this.tgt, mu);
@@ -332,7 +335,6 @@
     var wx = p.cx + p.scale * Math.sin(p.fx * this.t);
     var wy = p.cy + p.scale * 0.62 * Math.sin(p.fy * this.t + Math.PI / 3);
     var x = wx, y = wy;
-
     if (this.mode === 'wave') {
       var w = this.wave;
       var uu = (time - w.start) / w.dur;
@@ -341,16 +343,15 @@
         this.wave = null;
         this.schedule(time);
       } else {
-        var px = -0.12 * W + uu * 1.24 * W;
-        var py = w.baseY + w.amp * waveValue(w.type, uu * w.cycles * TAU, this.seed);
+        var qx = -0.12 * W + uu * 1.24 * W;
+        var qy = w.baseY + w.amp * waveValue(w.type, uu * w.cycles * TAU, this.seed);
         var edge = smoothstep(Math.min(uu / 0.12, (1 - uu) / 0.12));
-        x = lerp(wx, px, edge);
-        y = lerp(wy, py, edge);
+        x = lerp(wx, qx, edge);
+        y = lerp(wy, qy, edge);
       }
     }
     this.points.push({ x: x, y: y });
   };
-
   Trace.prototype.draw = function (time) {
     var pts = this.points;
     if (pts.length < 3) return;
@@ -365,11 +366,11 @@
       var e = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
       if (e - s < 2) continue;
       var k = (b + 1) / BANDS;
-      var a = 0.014 + 0.098 * k * k * boost;
+      var a = 0.014 + 0.094 * k * k * boost;
       ctx.beginPath();
       ctx.moveTo(pts[s].x, pts[s].y);
       for (var i = s + 1; i < e; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 48%, 66%, ' + a.toFixed(4) + ')';
+      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 44%, 68%, ' + a.toFixed(4) + ')';
       ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k);
       ctx.stroke();
     }
@@ -380,9 +381,6 @@
     traces = [];
     for (var i = 0; i < 5; i++) traces.push(new Trace(i + 1));
   }
-
-  /* Occasionally a second line answers with a different waveform,
-     so more than one shape is on screen at once. */
   function maybeBuddy(origin, time, type) {
     if (Math.random() > 0.55) return;
     var pool = [];
@@ -398,36 +396,12 @@
     other.nextWaveAt = time + 400 + Math.random() * 2400;
   }
 
-  /* ---------- grain ---------- */
-  var grain = [];
-  function initGrain() {
-    grain = [];
-    var n = Math.floor((W * H) / 5200);
-    for (var i = 0; i < n; i++) {
-      grain.push({
-        x: Math.random() * W, y: Math.random() * H,
-        a: 0.014 + Math.random() * 0.032,
-        ph: Math.random() * TAU,
-        sp: 0.0004 + Math.random() * 0.0009
-      });
-    }
-  }
-  function drawGrain(time) {
-    ctx.fillStyle = 'rgb(214,232,238)';
-    for (var i = 0; i < grain.length; i++) {
-      var p = grain[i];
-      ctx.globalAlpha = p.a * 0.55 * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * p.sp + p.ph)));
-      ctx.fillRect(p.x, p.y, 1, 1);
-    }
-    ctx.globalAlpha = 1;
-  }
-
   /* ---------- backdrop ---------- */
   function drawBackdrop(t) {
     var hue = baseHue(t);
     var g = ctx.createRadialGradient(W * 0.5, H * 0.46, 0, W * 0.5, H * 0.46, Math.max(W, H) * 0.78);
-    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 38%, 15%, 0.055)');
-    g.addColorStop(1, 'hsla(' + ((hue + 24) % 360).toFixed(1) + ', 40%, 4%, 0.055)');
+    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 36%, 15%, 0.055)');
+    g.addColorStop(1, 'hsla(' + ((hue + 22) % 360).toFixed(1) + ', 38%, 4%, 0.055)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -444,13 +418,11 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = '#05070a';
     ctx.fillRect(0, 0, W, H);
-    initNoise();
-    if (!grainTiles.length) buildGrainTiles();
+    initField();
     initWashes();
     initTraces();
-    initGrain();
+    initSpeck();
   }
-
   var resizeTimer = null;
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
@@ -471,18 +443,21 @@
     for (var i = 0; i < washes.length; i++) washes[i].draw(time);
     for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
-    if (frame % 5 === 0) renderNoise(time);
-    drawNoise();
-    drawStriation(time);
-    if (frame % 3 === 0) tileIdx = (tileIdx + 1) % grainTiles.length;
-    drawGrainTile(time);
-    if (frame % 2 === 0) drawGrain(time);
+    /* one strip per frame; all strips share a single timestamp so the
+       field stays internally consistent and never tears */
+    if (strip === 0) renderT = time;
+    renderStrip(renderT, strip);
+    strip++;
+    if (strip >= STRIPS) { fCtx.putImageData(fImg, 0, 0); strip = 0; }
+
+    drawField();
+    if (frame % 2 === 0) drawSpeck(time);
 
     frame++;
     requestAnimationFrame(animate);
   }
 
-  /* ---------- random placement helper ---------- */
+  /* ---------- random placement ---------- */
   window.PS = {
     placeRandom: function (el, opts) {
       if (!el) return;
@@ -497,7 +472,6 @@
       var availW = Math.max(10, vw * (1 - mx * 2) - w);
       var availH = Math.max(10, vh * (1 - my * 2) - h);
       var best = null, bestScore = -Infinity;
-
       for (var n = 0; n < 300; n++) {
         var x = vw * mx + Math.random() * availW;
         var y = vh * my + Math.random() * availH;

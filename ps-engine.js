@@ -1,6 +1,6 @@
 /* ============================================================
    Presque Stable — background engine
-   Soft morphing colour field + otoconia crystal layer
+   Soft morphing colour field + rotating CaCO3 structure
    Shared by index.html and releases.html
    ============================================================ */
 (function () {
@@ -224,219 +224,225 @@
   }
 
   /* ============================================================
-     OTOCONIA LAYER  (addition)
+     MOLECULE — calcium carbonate (calcite, R-3c)
 
-     Calcium-carbonate crystals resting on a gel bed in the inner
-     ear. A gravity vector drifts and never settles; the crystals
-     lag behind it, lean, and resettle. Tip links between
-     neighbours show only when strained. Rarely one detaches and
-     drifts across the field before rejoining.
+     Real crystallographic coordinates: a = 4.99 A, c = 17.06 A.
+     Planar CO3 groups (C-O = 1.284 A, O-C-O = 120 deg) stacked
+     between layers of Ca, octahedrally coordinated at 2.36 A.
+     Carbonate groups are culled as whole units so no CO3 is ever
+     broken apart. Rotates slowly on three axes, centred.
      ============================================================ */
 
-  var crystals = [], links = [], loose = null, nextLooseAt = 0;
+  var ATOMS = [];      /* {x,y,z,el} centred, in Angstrom */
+  var BONDS = [];      /* {a,b,co}  co=true for covalent C-O    */
+  var MOL_R = 1;
+  var sprites = {};
+  var order = [];      /* reusable index array for depth sort   */
+  var px_ = [], py_ = [], pz_ = [], pf_ = [];
 
-  /* gravity direction — a slow irrational drift, never repeating */
-  var gx = 0, gy = 1, gAng = Math.PI / 2;
-  function updateGravity(time) {
-    var s = REDUCED ? 0.35 : 1;
-    var a = Math.sin(time * 0.0000362 * s) * 0.55
-          + Math.sin(time * 0.0000149 * s + 2.1) * 0.34
-          + Math.sin(time * 0.0000083 * s + 4.7) * 0.22;
-    gAng = Math.PI / 2 + a;          /* wanders around "down" */
-    gx = Math.cos(gAng);
-    gy = Math.sin(gAng);
-  }
+  var ELEMENTS = {
+    Ca: { rad: 0.56, h: 205, s: 32, l: 60 },
+    C:  { rad: 0.30, h: 216, s: 10, l: 34 },
+    O:  { rad: 0.38, h: 6,   s: 62, l: 51 }
+  };
 
-  function initCrystals() {
-    crystals = [];
-    links = [];
-    loose = null;
-    nextLooseAt = 14000 + Math.random() * 26000;
+  function buildMolecule() {
+    var a = 4.99, c = 17.06, SQ3 = 0.8660254, oBond = 1.284;
+    var cent = [[0, 0, 0], [2 / 3, 1 / 3, 1 / 3], [1 / 3, 2 / 3, 2 / 3]];
 
-    var n = Math.round((W * H) / 20000);
-    if (n < 24) n = 24;
-    if (n > 110) n = 110;
-
-    /* jittered grid so spacing stays even but not regular */
-    var cols = Math.max(4, Math.round(Math.sqrt(n * (W / H))));
-    var rows = Math.max(3, Math.ceil(n / cols));
-    var cw = W / cols, ch = H / rows;
-
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        if (crystals.length >= n) break;
-        crystals.push({
-          hx: (c + 0.5) * cw + (Math.random() - 0.5) * cw * 0.72,
-          hy: (r + 0.5) * ch + (Math.random() - 0.5) * ch * 0.72,
-          ox: 0, oy: 0, vx: 0, vy: 0,
-          /* heavier crystals lag further — this is the inertia */
-          mass: 0.55 + Math.random() * 0.85,
-          k: 0.0016 + Math.random() * 0.0022,      /* spring to home */
-          size: 1.5 + Math.random() * Math.random() * 3.4,
-          ang: Math.random() * TAU,
-          angBias: (Math.random() - 0.5) * 1.5,
-          angLag: 0.006 + Math.random() * 0.016,
-          flash: 0,
-          state: 0                                  /* 0 settled, 1 loose */
-        });
-      }
+    function cart(u, v, w) {
+      return { x: a * (u - v * 0.5), y: a * (v * SQ3), z: c * w };
     }
 
-    /* tip links: nearest neighbours only, computed once */
-    var maxD = Math.min(W, H) * 0.14;
-    for (var i = 0; i < crystals.length; i++) {
-      var a = crystals[i], found = 0;
-      for (var j = i + 1; j < crystals.length && found < 2; j++) {
-        var b = crystals[j];
-        var dx = b.hx - a.hx, dy = b.hy - a.hy;
-        var d = Math.sqrt(dx * dx + dy * dy);
-        if (d < maxD) {
-          links.push({ a: i, b: j, rest: d, flash: 0 });
-          found++;
+    var groups = [], calciums = [];
+    var gSeen = {}, cSeen = {};
+
+    for (var iu = -1; iu <= 1; iu++) {
+      for (var iv = -1; iv <= 1; iv++) {
+        for (var iw = -1; iw <= 1; iw++) {
+          for (var t = 0; t < 3; t++) {
+            var b = cent[t];
+            var u = b[0] + iu, v = b[1] + iv, w = b[2] + iw;
+
+            /* two Ca layers per cell */
+            var ca1 = cart(u, v, w), ca2 = cart(u, v, w + 0.5);
+            var k1 = ca1.x.toFixed(2) + '|' + ca1.y.toFixed(2) + '|' + ca1.z.toFixed(2);
+            var k2 = ca2.x.toFixed(2) + '|' + ca2.y.toFixed(2) + '|' + ca2.z.toFixed(2);
+            if (!cSeen[k1]) { cSeen[k1] = 1; calciums.push(ca1); }
+            if (!cSeen[k2]) { cSeen[k2] = 1; calciums.push(ca2); }
+
+            /* two carbonate layers, rotated 60 deg from each other */
+            var defs = [[w + 0.25, 0], [w + 0.75, 1.0471976]];
+            for (var d = 0; d < 2; d++) {
+              var p = cart(u, v, defs[d][0]), rot = defs[d][1];
+              var gk = p.x.toFixed(2) + '|' + p.y.toFixed(2) + '|' + p.z.toFixed(2);
+              if (gSeen[gk]) continue;
+              gSeen[gk] = 1;
+              var os = [];
+              for (var k = 0; k < 3; k++) {
+                var th = rot + k * 2.0943951;   /* 120 deg apart, planar */
+                os.push({ x: p.x + Math.cos(th) * oBond,
+                          y: p.y + Math.sin(th) * oBond,
+                          z: p.z });
+              }
+              groups.push({ c: p, os: os });
+            }
+          }
         }
       }
     }
+
+    /* centroid over every atom */
+    var mx = 0, my = 0, mz = 0, n = 0, i;
+    for (i = 0; i < groups.length; i++) {
+      mx += groups[i].c.x; my += groups[i].c.y; mz += groups[i].c.z; n++;
+      for (var j = 0; j < 3; j++) {
+        mx += groups[i].os[j].x; my += groups[i].os[j].y; mz += groups[i].os[j].z; n++;
+      }
+    }
+    for (i = 0; i < calciums.length; i++) {
+      mx += calciums[i].x; my += calciums[i].y; mz += calciums[i].z; n++;
+    }
+    mx /= n; my /= n; mz /= n;
+
+    /* cull by whole group so carbonates stay intact */
+    var R = 6.0;
+    ATOMS = []; BONDS = [];
+    for (i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      var cxx = g.c.x - mx, cyy = g.c.y - my, czz = g.c.z - mz;
+      if (Math.sqrt(cxx * cxx + cyy * cyy + czz * czz) > R) continue;
+      var ci = ATOMS.length;
+      ATOMS.push({ x: cxx, y: cyy, z: czz, el: 'C' });
+      for (var m = 0; m < 3; m++) {
+        var o = g.os[m];
+        ATOMS.push({ x: o.x - mx, y: o.y - my, z: o.z - mz, el: 'O' });
+        BONDS.push({ a: ci, b: ATOMS.length - 1, co: true });
+      }
+    }
+    var caStart = ATOMS.length;
+    for (i = 0; i < calciums.length; i++) {
+      var q = calciums[i];
+      var qx = q.x - mx, qy = q.y - my, qz = q.z - mz;
+      if (Math.sqrt(qx * qx + qy * qy + qz * qz) > R) continue;
+      ATOMS.push({ x: qx, y: qy, z: qz, el: 'Ca' });
+    }
+
+    /* Ca-O coordination, drawn faint */
+    for (i = caStart; i < ATOMS.length; i++) {
+      var A = ATOMS[i];
+      for (var jj = 0; jj < caStart; jj++) {
+        var B = ATOMS[jj];
+        if (B.el !== 'O') continue;
+        var dx = A.x - B.x, dy = A.y - B.y, dz = A.z - B.z;
+        if (dx * dx + dy * dy + dz * dz < 6.6) BONDS.push({ a: i, b: jj, co: false });
+      }
+    }
+
+    /* model radius */
+    MOL_R = 1;
+    for (i = 0; i < ATOMS.length; i++) {
+      var r = Math.sqrt(ATOMS[i].x * ATOMS[i].x + ATOMS[i].y * ATOMS[i].y + ATOMS[i].z * ATOMS[i].z);
+      if (r > MOL_R) MOL_R = r;
+    }
+
+    order = new Array(ATOMS.length);
+    px_ = new Float32Array(ATOMS.length);
+    py_ = new Float32Array(ATOMS.length);
+    pz_ = new Float32Array(ATOMS.length);
+    pf_ = new Float32Array(ATOMS.length);
+    for (i = 0; i < ATOMS.length; i++) order[i] = i;
   }
 
-  function updateCrystals(time, dt) {
-    var f = dt / 16.667;
-    if (f > 3) f = 3;
-
-    for (var i = 0; i < crystals.length; i++) {
-      var p = crystals[i];
-
-      if (p.state === 1) {
-        /* detached: drifts with gravity, slowly re-homes */
-        p.ox += p.vx * f;
-        p.oy += p.vy * f;
-        p.vx += gx * 0.0042 * f;
-        p.vy += gy * 0.0042 * f;
-        p.vx *= 0.995; p.vy *= 0.995;
-        p.ang += 0.004 * f;
-        var px = p.hx + p.ox, py = p.hy + p.oy;
-        if (px < -60 || px > W + 60 || py < -60 || py > H + 60) {
-          /* rejoin somewhere new */
-          p.hx = 40 + Math.random() * (W - 80);
-          p.hy = 40 + Math.random() * (H - 80);
-          p.ox = p.oy = p.vx = p.vy = 0;
-          p.state = 0;
-          loose = null;
-        }
-      } else {
-        /* settled: spring to home + pull along gravity, damped */
-        var ax = -p.k * p.ox + gx * 0.055 * p.mass;
-        var ay = -p.k * p.oy + gy * 0.055 * p.mass;
-        p.vx = (p.vx + ax * f) * 0.962;
-        p.vy = (p.vy + ay * f) * 0.962;
-        p.ox += p.vx * f;
-        p.oy += p.vy * f;
-      }
-
-      /* orientation eases toward gravity, each at its own rate */
-      var target = gAng + p.angBias;
-      var da = target - p.ang;
-      while (da > Math.PI) da -= TAU;
-      while (da < -Math.PI) da += TAU;
-      p.ang += da * p.angLag * f;
-
-      if (p.flash > 0) p.flash -= 0.022 * f;
-    }
-
-    /* detachment: one at a time, rarely */
-    if (!REDUCED && !loose && time > nextLooseAt) {
-      var pick = crystals[(Math.random() * crystals.length) | 0];
-      if (pick && pick.state === 0) {
-        pick.state = 1;
-        pick.vx = (Math.random() - 0.5) * 0.22;
-        pick.vy = (Math.random() - 0.5) * 0.22;
-        pick.flash = 1;
-        loose = pick;
-      }
-      nextLooseAt = time + 26000 + Math.random() * 44000;
-    }
-
-    /* tip-link strain */
-    for (var L = 0; L < links.length; L++) {
-      var l = links[L];
-      var A = crystals[l.a], B = crystals[l.b];
-      if (A.state || B.state) { l.strain = 0; continue; }
-      var dx = (B.hx + B.ox) - (A.hx + A.ox);
-      var dy = (B.hy + B.oy) - (A.hy + A.oy);
-      var d = Math.sqrt(dx * dx + dy * dy);
-      var s = (d - l.rest) / l.rest;
-      l.strain = s > 0 ? s : 0;
-      /* past threshold the link releases with a brief flash */
-      if (l.strain > 0.052 && l.flash <= 0) {
-        l.flash = 1;
-        A.flash = 1; B.flash = 1;
-      }
-      if (l.flash > 0) l.flash -= 0.020 * f;
+  /* pre-rendered shaded spheres — far cheaper than a gradient per atom */
+  function makeSprites() {
+    sprites = {};
+    var S = 72;
+    for (var el in ELEMENTS) {
+      var e = ELEMENTS[el];
+      var cv = document.createElement('canvas');
+      cv.width = S; cv.height = S;
+      var g2 = cv.getContext('2d');
+      var grd = g2.createRadialGradient(S * 0.36, S * 0.33, S * 0.03, S * 0.5, S * 0.5, S * 0.49);
+      grd.addColorStop(0,    'hsl(' + e.h + ',' + e.s + '%,' + Math.min(96, e.l + 34) + '%)');
+      grd.addColorStop(0.45, 'hsl(' + e.h + ',' + e.s + '%,' + e.l + '%)');
+      grd.addColorStop(1,    'hsl(' + e.h + ',' + e.s + '%,' + Math.max(5, e.l - 26) + '%)');
+      g2.fillStyle = grd;
+      g2.beginPath();
+      g2.arc(S * 0.5, S * 0.5, S * 0.48, 0, TAU);
+      g2.fill();
+      sprites[el] = cv;
     }
   }
 
-  function drawCrystals(time) {
-    var hue = baseHue(time);
+  function drawMolecule(time) {
+    if (!ATOMS.length) return;
+
+    var sp = REDUCED ? 0.22 : 1;
+    var ry = time * 0.000105 * sp;                                  /* ~60 s / turn */
+    var rx = 0.34 + 0.20 * Math.sin(time * 0.000038 * sp);
+    var rz = 0.10 * Math.sin(time * 0.000027 * sp + 1.3);
+
+    var cY = Math.cos(ry), sY = Math.sin(ry);
+    var cX = Math.cos(rx), sX = Math.sin(rx);
+    var cZ = Math.cos(rz), sZ = Math.sin(rz);
+
+    var cx = W * 0.5, cy = H * 0.46;
+    var size = Math.min(W, H) * 0.21;
+    var scale = size / MOL_R;
+    var camD = 3.4;
+    var i, a;
+
+    for (i = 0; i < ATOMS.length; i++) {
+      a = ATOMS[i];
+      var x1 = a.x * cY + a.z * sY;
+      var z1 = -a.x * sY + a.z * cY;
+      var y2 = a.y * cX - z1 * sX;
+      var z2 = a.y * sX + z1 * cX;
+      var x3 = x1 * cZ - y2 * sZ;
+      var y3 = x1 * sZ + y2 * cZ;
+      var f = camD / (camD + z2 / MOL_R);
+      px_[i] = cx + x3 * scale * f;
+      py_[i] = cy + y3 * scale * f;
+      pz_[i] = z2;
+      pf_[i] = f;
+    }
+
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
 
-    /* --- tip links: only visible under tension --- */
+    /* bonds first, atoms overlay them */
     ctx.lineCap = 'round';
-    for (var L = 0; L < links.length; L++) {
-      var l = links[L];
-      if (!l.strain && l.flash <= 0) continue;
-      var A = crystals[l.a], B = crystals[l.b];
-      var a = l.strain * 2.6;
-      if (l.flash > 0) a += l.flash * 0.22;
-      if (a <= 0.004) continue;
-      if (a > 0.20) a = 0.20;
+    for (i = 0; i < BONDS.length; i++) {
+      var bd = BONDS[i];
+      var ia = bd.a, ib = bd.b;
+      var near = 0.5 - 0.25 * ((pz_[ia] + pz_[ib]) / MOL_R);
+      if (near < 0) near = 0; else if (near > 1) near = 1;
+      var al = bd.co ? (0.10 + 0.24 * near) : (0.020 + 0.055 * near);
+      ctx.strokeStyle = 'rgba(206,222,238,' + al.toFixed(4) + ')';
+      ctx.lineWidth = (bd.co ? 1.5 : 0.6) * (0.65 + 0.5 * near);
       ctx.beginPath();
-      ctx.moveTo(A.hx + A.ox, A.hy + A.oy);
-      ctx.lineTo(B.hx + B.ox, B.hy + B.oy);
-      ctx.strokeStyle = 'hsla(' + ((hue - 16 + 360) % 360).toFixed(1) +
-                        ', 70%, 80%, ' + a.toFixed(4) + ')';
-      ctx.lineWidth = 0.6;
+      ctx.moveTo(px_[ia], py_[ia]);
+      ctx.lineTo(px_[ib], py_[ib]);
       ctx.stroke();
     }
 
-    /* --- crystals --- */
-    for (var i = 0; i < crystals.length; i++) {
-      var p = crystals[i];
-      var x = p.hx + p.ox, y = p.hy + p.oy;
+    /* painter's algorithm — furthest first */
+    order.sort(function (p, q) { return pz_[q] - pz_[p]; });
 
-      /* birefringence: calcite splits light by orientation, so hue
-         comes from how the crystal sits relative to gravity */
-      var rel = p.ang - gAng;
-      var bi = Math.sin(rel * 2);
-      var h = (hue + bi * 46 + 360) % 360;
-      var lum = 0.66 + 0.20 * Math.cos(rel * 2);
-
-      var a = 0.070 + 0.055 * Math.abs(bi);
-      if (p.state === 1) a *= 1.7;
-      if (p.flash > 0) a += p.flash * 0.10;
-
-      var s = p.size;
-      var ca = Math.cos(p.ang), sa = Math.sin(p.ang);
-
-      /* rhombohedral facet — a small leaning diamond */
-      ctx.beginPath();
-      ctx.moveTo(x + ca * s * 1.7, y + sa * s * 1.7);
-      ctx.lineTo(x - sa * s * 0.72, y + ca * s * 0.72);
-      ctx.lineTo(x - ca * s * 1.7, y - sa * s * 1.7);
-      ctx.lineTo(x + sa * s * 0.72, y - ca * s * 0.72);
-      ctx.closePath();
-      ctx.fillStyle = 'hsla(' + h.toFixed(1) + ', 78%, ' +
-                      (lum * 100).toFixed(0) + '%, ' + a.toFixed(4) + ')';
-      ctx.fill();
-
-      /* lit edge along the long axis */
-      ctx.beginPath();
-      ctx.moveTo(x + ca * s * 1.7, y + sa * s * 1.7);
-      ctx.lineTo(x - sa * s * 0.72, y + ca * s * 0.72);
-      ctx.strokeStyle = 'hsla(' + h.toFixed(1) + ', 62%, 92%, ' +
-                        (a * 0.85).toFixed(4) + ')';
-      ctx.lineWidth = 0.55;
-      ctx.stroke();
+    for (var k = 0; k < order.length; k++) {
+      i = order[k];
+      a = ATOMS[i];
+      var e = ELEMENTS[a.el];
+      var r = e.rad * scale * pf_[i] * 0.62;
+      if (r < 0.4) continue;
+      var nz = 0.5 - 0.5 * (pz_[i] / MOL_R);
+      if (nz < 0) nz = 0; else if (nz > 1) nz = 1;
+      ctx.globalAlpha = 0.30 + 0.56 * nz;
+      var s2 = r * 2;
+      ctx.drawImage(sprites[a.el], px_[i] - r, py_[i] - r, s2, s2);
     }
+
     ctx.restore();
   }
 
@@ -475,7 +481,6 @@
     initNoise();
     initWashes();
     initGrain();
-    initCrystals();
   }
   var resizeTimer = null;
   window.addEventListener('resize', function () {
@@ -484,12 +489,8 @@
   });
 
   /* ---------- loop ---------- */
-  var frame = 0, last = 0;
+  var frame = 0;
   function animate(time) {
-    var dt = time - last;
-    if (!(dt > 0) || dt > 48) dt = 16.7;
-    last = time;
-
     ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, W, H);
 
@@ -508,9 +509,7 @@
     drawNoise();
     if (frame % 2 === 0) drawGrain(time);
 
-    updateGravity(time);
-    updateCrystals(time, dt);
-    drawCrystals(time);
+    drawMolecule(time);
 
     drawScrim();
 
@@ -556,6 +555,8 @@
     }
   };
 
+  buildMolecule();
+  makeSprites();
   resize();
   requestAnimationFrame(animate);
 })();

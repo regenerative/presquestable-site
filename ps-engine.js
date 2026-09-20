@@ -292,9 +292,11 @@
           B = lutMid[l3 + 2] + (lutHi[l3 + 2] - lutMid[l3 + 2]) * u2;
         }
 
-        R += spec * 26; G += spec * 28; B += spec * 33;
+        R += spec * 38; G += spec * 41; B += spec * 48;
 
-        var amt = v * 0.30;
+        /* MAIN BRIGHTNESS DIAL — raise for a stronger lattice,
+           lower for a fainter one. */
+        var amt = v * 0.44;
         R *= amt; G *= amt; B *= amt;
         fData[k++] = R > 255 ? 255 : R;
         fData[k++] = G > 255 ? 255 : G;
@@ -310,7 +312,7 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.62;
+    ctx.globalAlpha = 0.80;
     ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
@@ -370,201 +372,6 @@
     for (var i = 0; i < 5; i++) washes.push(new ColorWash(i * 2.3 + 1));
   }
 
-  /* ---------- waveforms ---------- */
-  var WAVE_TYPES = ['sine', 'triangle', 'saw', 'ramp', 'square', 'pulse', 'sh'];
-  function waveValue(type, phase, seed) {
-    var p = ((phase % TAU) + TAU) % TAU;
-    var u = p / TAU;
-    switch (type) {
-      case 'sine':     return Math.sin(p);
-      case 'triangle': return 4 * Math.abs(u - 0.5) - 1;
-      case 'saw':      return 1 - 2 * u;
-      case 'ramp':     return 2 * u - 1;
-      case 'square':   return u < 0.5 ? 1 : -1;
-      case 'pulse':    return u < 0.22 ? 1 : -1;
-      case 'sh':       return rand01(seed * 131.7 + Math.floor(phase / TAU) * 17.3) * 2 - 1;
-    }
-    return 0;
-  }
-
-  /* ---------- traces ---------- */
-  function Trace(i) {
-    this.seed = i * 7.3 + 1.7;
-    this.t = i * 11;
-    this.points = [];
-    this.maxPoints = 760;
-    this.lineWidth = 1.25 + (i % 3) * 0.38;
-    /* wide spread so the five lines are visibly different colours */
-    this.hueOffset = i * 67 + 24;
-    /* each line's hue also drifts on its own slow cycle */
-    this.hueDrift = 0.0000260 + (i % 4) * 0.0000115;
-    this.huePhase = i * 1.37;
-    this.cur = this.randParams(this.seed);
-    this.tgt = this.randParams(this.seed + 13);
-    this.morphEvery = 26000 + i * 5200;
-    this.lastMorph = 0;
-    this.mode = 'wander';
-    this.wave = null;
-    this.forcedType = null;
-    /* first sweep comes early and they stagger, so you see one soon */
-    this.nextWaveAt = 3000 + Math.random() * 9000 + i * 7000;
-  }
-  Trace.prototype.randParams = function (s) {
-    var r = function (n) { return rand01(s * 17.3 + n * 5.11); };
-    return {
-      fx: 0.6 + r(1) * 2.2,
-      fy: 0.45 + r(2) * 1.9,
-      scale: Math.min(W, H) * (0.10 + r(3) * 0.26),
-      cx: W * (0.12 + r(4) * 0.76),
-      cy: H * (0.14 + r(5) * 0.70),
-      speed: (0.0016 + r(6) * 0.0032) * (REDUCED ? 0.4 : 1)
-    };
-  };
-  Trace.prototype.lerpParams = function (a, b, u) {
-    return {
-      fx: lerp(a.fx, b.fx, u), fy: lerp(a.fy, b.fy, u),
-      scale: lerp(a.scale, b.scale, u),
-      cx: lerp(a.cx, b.cx, u), cy: lerp(a.cy, b.cy, u),
-      speed: lerp(a.speed, b.speed, u)
-    };
-  };
-  /* guaranteed under 60s: 16-52s between sweeps */
-  Trace.prototype.schedule = function (time) {
-    this.nextWaveAt = time + 16000 + Math.random() * 36000;
-  };
-  Trace.prototype.startWave = function (time, type) {
-    type = type || this.forcedType || WAVE_TYPES[(Math.random() * WAVE_TYPES.length) | 0];
-    this.forcedType = null;
-    this.mode = 'wave';
-    this.wave = {
-      type: type, start: time,
-      dur: 7000 + Math.random() * 4500,
-      /* random frequency: 2 to 12 cycles across the screen */
-      cycles: 2 + ((Math.random() * 11) | 0),
-      /* large enough to read clearly */
-      amp: H * (0.075 + Math.random() * 0.135),
-      baseY: H * (0.20 + Math.random() * 0.60)
-    };
-    maybeBuddy(this, time, type);
-  };
-  Trace.prototype.update = function (time, dt) {
-    if (time - this.lastMorph > this.morphEvery) {
-      this.cur = this.lerpParams(this.cur, this.tgt, 1);
-      this.tgt = this.randParams(this.seed + time * 0.001);
-      this.lastMorph = time;
-    }
-    if (this.mode === 'wander' && !REDUCED && time >= this.nextWaveAt) this.startWave(time);
-    var sub = (this.mode === 'wave') ? 3 : 1;
-    for (var s = 1; s <= sub; s++) this.sample(time - dt + dt * s / sub, dt / sub);
-    /* during a sweep the trail must be long enough to span the whole
-       screen, or the waveform gets truncated before it reaches the edge */
-    var cap = (this.mode === 'wave') ? 2600 : this.maxPoints;
-    if (this.points.length > cap + 64) {
-      this.points.splice(0, this.points.length - cap);
-    }
-  };
-  Trace.prototype.sample = function (time, sdt) {
-    var mu = smoothstep(Math.min(1, (time - this.lastMorph) / this.morphEvery));
-    var p = this.lerpParams(this.cur, this.tgt, mu);
-    this.t += p.speed * (sdt / 16.667);
-    var wx = p.cx + p.scale * Math.sin(p.fx * this.t);
-    var wy = p.cy + p.scale * 0.62 * Math.sin(p.fy * this.t + Math.PI / 3);
-    var x = wx, y = wy;
-    if (this.mode === 'wave') {
-      var w = this.wave;
-      var uu = (time - w.start) / w.dur;
-      if (uu >= 1) {
-        this.mode = 'wander'; this.wave = null; this.schedule(time);
-      } else {
-        var qx = -0.14 * W + uu * 1.28 * W;
-        var qy = w.baseY + w.amp * waveValue(w.type, uu * w.cycles * TAU, this.seed);
-        /* tight crossfade: the shape is pure for ~88% of the sweep */
-        var edge = smoothstep(Math.min(uu / 0.06, (1 - uu) / 0.06));
-        x = lerp(wx, qx, edge);
-        y = lerp(wy, qy, edge);
-      }
-    }
-    this.points.push({ x: x, y: y });
-  };
-  Trace.prototype.draw = function (time) {
-    var pts = this.points;
-    if (pts.length < 3) return;
-    /* own hue: wide offset from base, plus an independent slow drift */
-    var hue = (baseHue(time) + this.hueOffset +
-               42 * Math.sin(time * this.hueDrift + this.huePhase) + 720) % 360;
-    var isWave = (this.mode === 'wave');
-    var BANDS = isWave ? 22 : 14;
-    var per = Math.max(2, Math.floor(pts.length / BANDS));
-    var boost = isWave ? 2.3 : 1;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    /* dark underdraw for separation from the lattice */
-    for (var b = 0; b < BANDS; b++) {
-      var s0 = b * per;
-      var e0 = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s0 + per + 1);
-      if (e0 - s0 < 2) continue;
-      var k0 = (b + 1) / BANDS;
-      ctx.beginPath();
-      ctx.moveTo(pts[s0].x, pts[s0].y);
-      for (var i0 = s0 + 1; i0 < e0; i0++) ctx.lineTo(pts[i0].x, pts[i0].y);
-      ctx.strokeStyle = 'rgba(3,5,10,' + (0.055 + 0.235 * k0 * k0 * boost).toFixed(4) + ')';
-      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k0) + 3.0;
-      ctx.stroke();
-    }
-
-    /* coloured glow */
-    for (var b1 = 0; b1 < BANDS; b1++) {
-      var s1 = b1 * per;
-      var e1 = (b1 === BANDS - 1) ? pts.length : Math.min(pts.length, s1 + per + 1);
-      if (e1 - s1 < 2) continue;
-      var k1 = (b1 + 1) / BANDS;
-      ctx.beginPath();
-      ctx.moveTo(pts[s1].x, pts[s1].y);
-      for (var i1 = s1 + 1; i1 < e1; i1++) ctx.lineTo(pts[i1].x, pts[i1].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 92%, 60%, ' +
-                        (0.030 + 0.185 * k1 * k1 * boost).toFixed(4) + ')';
-      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k1) + 2.2;
-      ctx.stroke();
-    }
-
-    /* bright saturated core */
-    for (var b2 = 0; b2 < BANDS; b2++) {
-      var s = b2 * per;
-      var e = (b2 === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
-      if (e - s < 2) continue;
-      var k = (b2 + 1) / BANDS;
-      var a = 0.075 + 0.680 * k * k * boost;
-      if (a > 1) a = 1;
-      ctx.beginPath();
-      ctx.moveTo(pts[s].x, pts[s].y);
-      for (var i = s + 1; i < e; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 86%, 78%, ' + a.toFixed(4) + ')';
-      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k) * (isWave ? 1.45 : 1);
-      ctx.stroke();
-    }
-  };
-
-  var traces = [];
-  function initTraces() {
-    traces = [];
-    for (var i = 0; i < 5; i++) traces.push(new Trace(i + 1));
-  }
-  function maybeBuddy(origin, time, type) {
-    if (Math.random() > 0.55) return;
-    var pool = [];
-    for (var i = 0; i < traces.length; i++) {
-      if (traces[i] !== origin && traces[i].mode === 'wander') pool.push(traces[i]);
-    }
-    if (!pool.length) return;
-    var other = pool[(Math.random() * pool.length) | 0];
-    var alt = WAVE_TYPES[(Math.random() * WAVE_TYPES.length) | 0];
-    var guard = 0;
-    while (alt === type && guard++ < 8) alt = WAVE_TYPES[(Math.random() * WAVE_TYPES.length) | 0];
-    other.forcedType = alt;
-    other.nextWaveAt = time + 400 + Math.random() * 2400;
-  }
-
   /* ---------- backdrop ---------- */
   function drawBackdrop(t) {
     var hue = baseHue(t);
@@ -599,7 +406,6 @@
     ctx.fillRect(0, 0, W, H);
     initField();
     initWashes();
-    initTraces();
     initSpeck();
   }
   var resizeTimer = null;
@@ -611,8 +417,6 @@
   /* ---------- loop ---------- */
   var last = 0, frame = 0;
   function animate(time) {
-    var dt = time - last;
-    if (!(dt > 0) || dt > 48) dt = 16.7;
     last = time;
 
     ctx.fillStyle = 'rgba(5,7,12,0.034)';
@@ -637,8 +441,6 @@
     drawField();
     if (frame % 2 === 0) drawSpeck(time);
     drawScrim();
-
-    for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
     frame++;
     requestAnimationFrame(animate);

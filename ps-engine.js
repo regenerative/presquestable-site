@@ -1,6 +1,6 @@
 /* ============================================================
    Presque Stable — background engine
-   Fine morphing cellular lattice
+   Morphing cellular lattice, saturated colour
    Shared by index.html and releases.html
    ============================================================ */
 (function () {
@@ -63,11 +63,19 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Full spectrum, cool centre of gravity */
   var PALETTE = [190, 208, 228, 252, 276, 300, 328, 348, 18, 40, 62, 150, 172];
-  var ANCHOR_MS = REDUCED ? 300000 : 118000;
+
+  /* Each anchor holds ~42s, so a shift is visible within a normal
+     visit. Full cycle ~9 min. */
+  var ANCHOR_MS = REDUCED ? 90000 : 42000;
+
+  /* Random entry point into the palette on every load. Without this
+     the page always opened on PALETTE[0] (cyan) and stayed there for
+     the first two minutes — which is why every screenshot was blue. */
+  var HUE_SEED = Math.random() * PALETTE.length * ANCHOR_MS;
+
   function baseHue(t) {
-    var p = t / ANCHOR_MS;
+    var p = (t + HUE_SEED) / ANCHOR_MS;
     var i = Math.floor(p) % PALETTE.length;
     var j = (i + 1) % PALETTE.length;
     var a = PALETTE[i], b = PALETTE[j], d = b - a;
@@ -75,15 +83,12 @@
     return (a + d * smoothstep(p - Math.floor(p)) + 360) % 360;
   }
 
-  /* ---------- lattice scales ----------
-     Fine mesh. Raise for finer cells, lower for coarser. */
+  /* ---------- lattice scales ---------- */
   var S_FAR = 24.0, S_MID = 13.0, S_NEAR = 7.2;
   var T_FAR = 0.15, T_MID = 0.20, T_NEAR = 0.28;
 
   /* ============================================================
      CELL GRID
-     Feature points precomputed once per pass; the per-pixel
-     inner loop is nine distance checks and nothing more.
      ============================================================ */
   function CellGrid() {
     this.pts = null; this.nx = 0; this.ny = 0; this.x0 = 0; this.y0 = 0;
@@ -194,11 +199,20 @@
 
     var hue = baseHue(time);
     for (var i = 0; i < LUT_N; i++) {
-      var off = (i / (LUT_N - 1) - 0.5) * 52;
+      /* Wide local spread: different regions of the field sit on
+         different hues at the same instant, so colour is visible in
+         a single still frame, not only over time. */
+      var off = (i / (LUT_N - 1) - 0.5) * 104;
       var h = hue + off;
-      var a = hsl2rgb(h + 10, 0.52, 0.17);
-      var b = hsl2rgb(h, 0.44, 0.54);
-      var c = hsl2rgb(h - 14, 0.30, 0.88);
+
+      /* All three stops hold saturation.
+         The highlight matters most: struts are the brightest and most
+         visible part of the image, so a pale desaturated highlight
+         turns the whole page grey no matter what the palette does. */
+      var a = hsl2rgb(h + 18, 0.80, 0.27);   /* cavity     */
+      var b = hsl2rgb(h,      0.88, 0.53);   /* strut body */
+      var c = hsl2rgb(h - 20, 0.70, 0.71);   /* lit edge   */
+
       lutDeep[i * 3] = a[0]; lutDeep[i * 3 + 1] = a[1]; lutDeep[i * 3 + 2] = a[2];
       lutMid[i * 3] = b[0]; lutMid[i * 3 + 1] = b[1]; lutMid[i * 3 + 2] = b[2];
       lutHi[i * 3] = c[0]; lutHi[i * 3 + 1] = c[1]; lutHi[i * 3 + 2] = c[2];
@@ -210,7 +224,6 @@
     var y0 = Math.floor(FH * s / STRIPS);
     var y1 = Math.floor(FH * (s + 1) / STRIPS);
     var ar = pAr, tb = pTb;
-    /* low enough to stay well clear of Nyquist — prevents moire */
     var tooth = 44;
 
     for (var y = y0; y < y1; y++) {
@@ -278,11 +291,12 @@
           B = lutMid[l3 + 2] + (lutHi[l3 + 2] - lutMid[l3 + 2]) * u2;
         }
 
-        R += spec * 22; G += spec * 24; B += spec * 28;
+        /* Small and hue-tinted. A large neutral white add here
+           bleaches precisely the brightest, most visible ridges. */
+        R += spec * 8; G += spec * 9; B += spec * 11;
 
-        /* MAIN BRIGHTNESS DIAL — kept below clipping so the
-           struts keep their shading instead of blowing to white. */
-        var amt = v * 0.40;
+        /* MAIN BRIGHTNESS DIAL */
+        var amt = v * 0.62;
         R *= amt; G *= amt; B *= amt;
         fData[k++] = R > 255 ? 255 : R;
         fData[k++] = G > 255 ? 255 : G;
@@ -298,7 +312,7 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.80;
+    ctx.globalAlpha = 0.92;
     ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
@@ -311,7 +325,7 @@
     for (var i = 0; i < n; i++) {
       speck.push({
         x: Math.random() * W, y: Math.random() * H,
-        a: 0.008 + Math.random() * Math.random() * 0.034,
+        a: 0.008 + Math.random() * Math.random() * 0.030,
         ph: Math.random() * TAU,
         sp: 0.00018 + Math.random() * 0.00040
       });
@@ -320,7 +334,7 @@
   function drawSpeck(time) {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.fillStyle = 'rgb(214,232,240)';
+    ctx.fillStyle = 'rgb(206,222,236)';
     for (var i = 0; i < speck.length; i++) {
       var p = speck[i];
       ctx.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(time * p.sp + p.ph));
@@ -331,24 +345,24 @@
 
   /* ---------- washes ---------- */
   function ColorWash(seed) {
-    this.hueOffset = (seed % 4) * 16 - 24;
+    this.hueOffset = (seed % 4) * 34 - 52;
     this.radius = Math.max(W, H) * (0.36 + (seed % 4) * 0.13);
     this.orbitR = Math.min(W, H) * (0.15 + (seed % 3) * 0.16);
     this.orbitSpeed = (0.000040 + (seed % 5) * 0.000019) * (REDUCED ? 0.3 : 1);
     this.phase = seed * 1.7;
     this.wobble = 0.55 + (seed % 3) * 0.2;
-    this.alpha = 0.028 + (seed % 3) * 0.010;
+    this.alpha = 0.070 + (seed % 3) * 0.024;
   }
   ColorWash.prototype.draw = function (t) {
-    var hue = (baseHue(t) + this.hueOffset) % 360;
+    var hue = (baseHue(t) + this.hueOffset + 360) % 360;
     var ang = t * this.orbitSpeed + this.phase;
     var cx = W * 0.5 + Math.cos(ang) * this.orbitR;
     var cy = H * 0.5 + Math.sin(ang * this.wobble) * this.orbitR * 0.75;
     var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, this.radius);
     var h = hue.toFixed(1);
-    g.addColorStop(0, 'hsla(' + h + ', 62%, 48%, ' + this.alpha.toFixed(4) + ')');
-    g.addColorStop(0.55, 'hsla(' + h + ', 62%, 41%, ' + (this.alpha * 0.4).toFixed(4) + ')');
-    g.addColorStop(1, 'hsla(' + h + ', 62%, 35%, 0)');
+    g.addColorStop(0, 'hsla(' + h + ', 88%, 52%, ' + this.alpha.toFixed(4) + ')');
+    g.addColorStop(0.55, 'hsla(' + h + ', 88%, 44%, ' + (this.alpha * 0.4).toFixed(4) + ')');
+    g.addColorStop(1, 'hsla(' + h + ', 88%, 38%, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   };
@@ -362,8 +376,8 @@
   function drawBackdrop(t) {
     var hue = baseHue(t);
     var g = ctx.createRadialGradient(W * 0.5, H * 0.44, 0, W * 0.5, H * 0.44, Math.max(W, H) * 0.80);
-    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 40%, 15%, 0.060)');
-    g.addColorStop(1, 'hsla(' + ((hue + 26) % 360).toFixed(1) + ', 44%, 4%, 0.060)');
+    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 70%, 18%, 0.115)');
+    g.addColorStop(1, 'hsla(' + ((hue + 40) % 360).toFixed(1) + ', 74%, 6%, 0.115)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -403,16 +417,14 @@
   /* ---------- loop ---------- */
   var frame = 0;
   function animate(time) {
-    /* Full opaque clear. A partial fade was needed only while the
-       trace lines drew trails; with them gone it let the 'screen'
-       blend accumulate frame over frame and bleach the struts white. */
+    /* Opaque clear. A partial fade would let the screen blend
+       accumulate frame over frame and bleach everything white. */
     ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, W, H);
 
     drawBackdrop(time);
     for (var i = 0; i < washes.length; i++) washes[i].draw(time);
 
-    /* phase 0 = setup only, phases 1..STRIPS = one strip each */
     if (phase === 0) {
       renderT = time;
       prepField(renderT);

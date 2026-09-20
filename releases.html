@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Presque Stable</title>
+<title>Presque Stable — Releases</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Presque Stable — electronic music.">
+<meta name="description" content="Presque Stable — releases.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
@@ -15,23 +15,15 @@
 <canvas id="stage"></canvas>
 <div class="vignette"></div>
 
-<a class="releases" id="releases" href="releases.html">
-  <span class="dot" aria-hidden="true"></span>
-  <span class="word">releases</span>
-</a>
-
-<div class="overlay">
-  <h1 class="name">presquestable</h1>
-</div>
+<div class="soon" id="soon">coming soon</div>
 
 <script src="ps-engine.js"></script>
 <script>
 (function () {
-  var link = document.getElementById('releases');
-  var name = document.querySelector('.name');
+  var soon = document.getElementById('soon');
 
   function place() {
-    if (window.PS) PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 40 });
+    if (window.PS) PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
   }
 
   if (document.fonts && document.fonts.ready) {
@@ -46,6 +38,15 @@
     clearTimeout(t);
     t = setTimeout(place, 200);
   });
+
+  /* Invisible way back — nothing is drawn for it.
+     Delete this block if you want a true dead end. */
+  setTimeout(function () {
+    document.addEventListener('click', function () { window.location.href = 'index.html'; });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') window.location.href = 'index.html';
+    });
+  }, 1200);
 })();
 </script>
 

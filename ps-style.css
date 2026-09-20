@@ -32,7 +32,7 @@ html, body {
   z-index: 5;
 }
 
-/* ---- name block: position unchanged (bottom-left, 6vw padding) ---- */
+/* ---- name block: bottom-left, 6vw padding ---- */
 .overlay {
   position: fixed;
   inset: 0;
@@ -63,8 +63,6 @@ html, body {
 
 /* ============================================================
    Small type — legibility first
-   Bigger, heavier, higher opacity, and each label carries its
-   own soft dark pad so it never sits on a bright strut.
    ============================================================ */
 
 .releases {
@@ -85,7 +83,6 @@ html, body {
   isolation: isolate;
 }
 
-/* soft dark pad behind the label */
 .releases::before {
   content: "";
   position: absolute;

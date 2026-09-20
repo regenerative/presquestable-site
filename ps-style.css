@@ -1,5 +1,6 @@
 /* ============================================================
    Presque Stable — shared styles
+   Warm bone palette, high-contrast type
    ============================================================ */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -7,7 +8,7 @@
 html, body {
   width: 100%;
   height: 100%;
-  background: #05070a;
+  background: #0b0805;
   overflow: hidden;
   font-family: 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -21,11 +22,15 @@ html, body {
   display: block;
 }
 
+/* warm vignette, not a cold black one */
 .vignette {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.5) 100%);
+  background: radial-gradient(ellipse at center,
+              rgba(0,0,0,0) 42%,
+              rgba(14,9,5,0.34) 74%,
+              rgba(14,9,5,0.62) 100%);
   z-index: 5;
 }
 
@@ -49,9 +54,14 @@ html, body {
   line-height: 0.94;
   letter-spacing: 0.005em;
   text-transform: lowercase;
-  color: #e8eff2;
-  opacity: 0.95;
-  text-shadow: 0 0 34px rgba(140, 175, 196, 0.24);
+  color: #fbf6ee;
+  opacity: 1;
+  /* layered dark halo: keeps the wordmark readable over lit struts */
+  text-shadow:
+    0 1px 2px  rgba(12, 8, 4, 0.92),
+    0 3px 14px rgba(12, 8, 4, 0.72),
+    0 6px 40px rgba(12, 8, 4, 0.55),
+    0 0 70px   rgba(214, 178, 130, 0.14);
 }
 
 /* ---- subtle clickable element ---- */
@@ -66,15 +76,18 @@ html, body {
   padding: 12px;
   margin: -12px;
   text-decoration: none;
-  color: #cfe0e4;
-  opacity: 0.32;
+  color: #f3ead9;
+  opacity: 0.48;
   transition: opacity 1.1s ease;
   will-change: opacity;
+  text-shadow:
+    0 1px 2px  rgba(12, 8, 4, 0.92),
+    0 2px 10px rgba(12, 8, 4, 0.75);
 }
 
 .releases:hover,
 .releases:focus-visible {
-  opacity: 0.9;
+  opacity: 1;
   outline: none;
 }
 
@@ -84,19 +97,20 @@ html, body {
   flex: 0 0 auto;
   border: 1px solid currentColor;
   border-radius: 50%;
+  box-shadow: 0 1px 6px rgba(12, 8, 4, 0.85);
   animation: breathe 7s ease-in-out infinite;
 }
 
 .releases .word {
   font-size: clamp(10px, 1.15vw, 12px);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.34em;
   text-transform: lowercase;
   white-space: nowrap;
 }
 
 @keyframes breathe {
-  0%, 100% { transform: scale(1);   opacity: 0.5; }
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
   50%      { transform: scale(1.55); opacity: 1; }
 }
 
@@ -106,22 +120,25 @@ html, body {
   left: 50%;
   top: 45%;
   z-index: 20;
-  color: #dfeaed;
+  color: #f6eee0;
   font-size: clamp(11px, 1.5vw, 15px);
-  font-weight: 300;
+  font-weight: 400;
   letter-spacing: 0.38em;
   text-transform: lowercase;
   white-space: nowrap;
   opacity: 0;
+  text-shadow:
+    0 1px 2px  rgba(12, 8, 4, 0.92),
+    0 2px 12px rgba(12, 8, 4, 0.78);
   animation: settle 3.4s ease forwards;
 }
 
 @keyframes settle {
   from { opacity: 0; }
-  to   { opacity: 0.46; }
+  to   { opacity: 0.72; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .releases .dot { animation: none; }
-  .soon { animation: none; opacity: 0.46; }
+  .soon { animation: none; opacity: 0.72; }
 }

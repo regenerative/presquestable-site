@@ -1,5 +1,6 @@
 /* ============================================================
    Presque Stable — background engine
+   Trabecular / cellular lattice, warm bone palette
    Shared by index.html and releases.html
    ============================================================ */
 (function () {
@@ -17,9 +18,16 @@
 
   /* ---------- maths ---------- */
   function smoothstep(t) { t = t < 0 ? 0 : (t > 1 ? 1 : t); return t * t * (3 - 2 * t); }
+  function sstep(a, b, x) { return smoothstep((x - a) / (b - a)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function rand01(n) { var x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
+  function hash2i(ix, iy, s) {
+    var h = Math.imul(ix, 1597334677) ^ Math.imul(iy, 668265263) ^ Math.imul(s, 374761393);
+    h = Math.imul(h ^ (h >>> 15), 2246822519);
+    h = Math.imul(h ^ (h >>> 13), 3266489917);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
   function hash3(ix, iy, iz) {
     var h = Math.imul(ix, 1597334677) ^ Math.imul(iy, 668265263) ^ Math.imul(iz, 374761393);
     h = Math.imul(h ^ (h >>> 15), 2246822519);
@@ -38,10 +46,38 @@
   function fbm2(x, y, z) {
     return 0.5 * vnoise(x, y, z) + 0.25 * vnoise(x * 2.03, y * 2.03, z * 1.4);
   }
-  function fbm3(x, y, z) {
-    return 0.5 * vnoise(x, y, z) +
-           0.25 * vnoise(x * 2.03, y * 2.03, z * 1.4) +
-           0.125 * vnoise(x * 4.11, y * 4.11, z * 1.9);
+
+  /* ---------- cellular (Worley) ----------
+     Feature points orbit slowly, so the lattice flexes in place
+     like living tissue. F2-F1 is small on a cell boundary, which
+     is what draws the struts. */
+  var wF1 = 0, wF2 = 0;
+  function worley(x, y, t, seed) {
+    var ix = Math.floor(x), iy = Math.floor(y);
+    var f1 = 1e9, f2 = 1e9;
+    for (var gy = -1; gy <= 1; gy++) {
+      for (var gx = -1; gx <= 1; gx++) {
+        var cx = ix + gx, cy = iy + gy;
+        var a = hash2i(cx, cy, seed) * TAU;
+        var b = hash2i(cx, cy, seed + 977) * TAU;
+        var sp = 0.35 + hash2i(cx, cy, seed + 311) * 0.65;
+        var px = cx + 0.5 + 0.42 * Math.sin(a + t * sp);
+        var py = cy + 0.5 + 0.42 * Math.cos(b + t * sp * 0.87);
+        var dx = px - x, dy = py - y;
+        var d = dx * dx + dy * dy;
+        if (d < f1) { f2 = f1; f1 = d; }
+        else if (d < f2) { f2 = d; }
+      }
+    }
+    wF1 = Math.sqrt(f1);
+    wF2 = Math.sqrt(f2);
+    return wF2 - wF1;
+  }
+
+  /* strut mask: bright on cell walls, dark inside cells */
+  function strut(x, y, t, seed, thick) {
+    var e = worley(x, y, t, seed);
+    return 1 - sstep(0, thick, e);
   }
 
   /* ---------- colour ---------- */
@@ -61,9 +97,10 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Cold only: teal -> cyan -> steel -> blue -> indigo -> cold violet */
-  var PALETTE = [174, 187, 196, 206, 214, 226, 242, 258];
-  var ANCHOR_MS = REDUCED ? 460000 : 190000;
+  /* Warm bone / ivory / sand. Low saturation so it reads as bone,
+     not orange. Never enters the blue half of the wheel. */
+  var PALETTE = [34, 30, 26, 38, 42, 46, 36, 31];
+  var ANCHOR_MS = REDUCED ? 460000 : 200000;
   function baseHue(t) {
     var p = t / ANCHOR_MS;
     var i = Math.floor(p) % PALETTE.length;
@@ -74,20 +111,18 @@
   }
 
   /* ============================================================
-     ORGANIC FIELD
-     Domain-warped fBm: the field is sampled through a position
-     that is itself displaced by noise. That is what produces
-     marbled, fibrous, living structure instead of blobs.
-     The field never translates — it only evolves on its own
-     internal axis, so nothing appears to slide anywhere.
+     TRABECULAR FIELD
+     Three depth layers of warped cellular noise:
+       far  — fine mesh, dim, recedes
+       mid  — medium lattice
+       near — heavy struts, bright, catches the light
      ============================================================ */
-  var FW = 168, FH = 95;
+  var FW = 150, FH = 84;
   var fCanvas = null, fCtx = null, fImg = null;
-  var strip = 0, STRIPS = 3;
-  var renderT = 0;
+  var strip = 0, STRIPS = 3, renderT = 0;
 
   function initField() {
-    FH = Math.max(60, Math.round(FW * (H / Math.max(1, W))));
+    FH = Math.max(56, Math.round(FW * (H / Math.max(1, W))));
     fCanvas = document.createElement('canvas');
     fCanvas.width = FW; fCanvas.height = FH;
     fCtx = fCanvas.getContext('2d');
@@ -103,74 +138,87 @@
     var d = fImg.data;
     var zs = REDUCED ? 0.3 : 1;
 
-    /* three independent evolution axes — no x/y translation anywhere */
-    var z1 = time * 0.0000205 * zs;
-    var z2 = time * 0.0000142 * zs + 53.7;
-    var z3 = time * 0.0000271 * zs + 128.3;
+    var tw = time * 0.0000165 * zs;          /* warp evolution   */
+    var tc = time * 0.0000430 * zs;          /* cell flexing     */
+    var tb = time * 0.0000240 * zs + 61.3;   /* thickness breath */
 
     var hue = baseHue(time);
-    var cDeep = hsl2rgb(hue + 16, 0.50, 0.30);
-    var cMid  = hsl2rgb(hue - 6,  0.40, 0.56);
-    var cHi   = hsl2rgb(hue - 20, 0.28, 0.78);
+    var cDeep = hsl2rgb(hue + 6,  0.26, 0.16);   /* cavity        */
+    var cMid  = hsl2rgb(hue,      0.20, 0.52);   /* strut body    */
+    var cHi   = hsl2rgb(hue - 5,  0.11, 0.88);   /* lit edge      */
 
     var y0 = Math.floor(FH * s / STRIPS);
     var y1 = Math.floor(FH * (s + 1) / STRIPS);
+    var ar = FW / FH;
 
     for (var y = y0; y < y1; y++) {
-      var py = (y / FH) * 3.0;
+      var py = y / FH;
       var k = (y * FW) * 4;
       for (var x = 0; x < FW; x++) {
-        var px = (x / FW) * 5.3;
+        var px = (x / FW) * ar;
 
-        /* --- first warp --- */
-        var q1 = fbm3(px, py, z1);
-        var q2 = fbm3(px + 5.2, py + 1.3, z1);
+        /* --- domain warp: bends the lattice organically --- */
+        var w1 = fbm2(px * 1.6, py * 1.6, tw);
+        var w2 = fbm2(px * 1.6 + 7.3, py * 1.6 + 2.1, tw);
+        var ux = px + 0.62 * (w1 - 0.5);
+        var uy = py + 0.62 * (w2 - 0.5);
 
-        /* --- second warp, fed by the first --- */
-        var wx = px + 3.4 * q1;
-        var wy = py + 3.4 * q2;
-        var r1 = fbm2(wx + 1.7, wy + 9.2, z2);
-        var r2 = fbm2(wx + 8.3, wy + 2.8, z2);
+        /* --- thickness varies across the field --- */
+        var thickVar = fbm2(ux * 2.2 + 3.1, uy * 2.2 - 1.7, tb);
 
-        /* --- final sample through the doubly-warped position --- */
-        var ax = px + 2.6 * r1;
-        var ay = py + 2.6 * r2;
-        var v = fbm3(ax, ay, z3);
+        /* --- far layer: fine receding mesh --- */
+        var sFar = strut(ux * 15.5, uy * 15.5, tc, 11, 0.13 + thickVar * 0.05);
+        var farDepth = wF1;
 
-        /* fibre: thin filaments through the warped field */
-        var fib = 1 - Math.abs(vnoise(ax * 2.6, ay * 2.6, z3 * 1.3) * 2 - 1);
-        fib = fib * fib * fib;
+        /* --- mid layer --- */
+        var sMid = strut(ux * 8.2 + 4.0, uy * 8.2 + 1.5, tc * 0.86, 29, 0.17 + thickVar * 0.07);
 
-        v = v * 0.80 + fib * 0.20;
+        /* --- near layer: heavy struts --- */
+        var sNear = strut(ux * 4.3 + 1.7, uy * 4.3 + 6.2, tc * 0.7, 47, 0.24 + thickVar * 0.10);
+        var nearCore = wF1;
 
-        /* gentle contrast — enough to see structure, not posterised */
-        v = (v - 0.30) / 0.40;
+        /* --- composite with depth falloff --- */
+        var v = sFar * 0.26 + sMid * 0.40 + sNear * 0.78;
+
+        /* occlusion: near struts shadow what sits behind them */
+        v *= (1 - sNear * 0.30);
+        v += sNear * 0.34;
+
+        /* specular bloom along the ridge of the near struts */
+        var spec = sNear * (1 - sstep(0.0, 0.34, nearCore));
+        spec = spec * spec;
+
+        /* fine surface tooth so it is never a flat gradient */
+        var tooth = vnoise(ux * 46, uy * 46, tb * 2.4);
+        v *= 0.90 + tooth * 0.20;
+
+        /* slight depth haze into the cavities */
+        v *= 0.82 + 0.18 * (1 - sstep(0.1, 0.5, farDepth));
+
         v = v < 0 ? 0 : (v > 1 ? 1 : v);
         v = v * v * (3 - 2 * v);
 
-        /* three-stop ramp reads as depth rather than a flat tint */
+        /* --- three-stop ramp: cavity -> strut -> lit edge --- */
         var R, G, B;
-        if (v < 0.55) {
-          var u = v / 0.55;
+        if (v < 0.52) {
+          var u = v / 0.52;
           R = cDeep[0] + (cMid[0] - cDeep[0]) * u;
           G = cDeep[1] + (cMid[1] - cDeep[1]) * u;
           B = cDeep[2] + (cMid[2] - cDeep[2]) * u;
         } else {
-          var u2 = (v - 0.55) / 0.45;
+          var u2 = (v - 0.52) / 0.48;
           R = cMid[0] + (cHi[0] - cMid[0]) * u2;
           G = cMid[1] + (cHi[1] - cMid[1]) * u2;
           B = cMid[2] + (cHi[2] - cMid[2]) * u2;
         }
 
-        /* warp vector tints the colour — organic variation, not uniform */
-        var tint = (r1 - r2) * 0.5;
-        R *= (1 - tint * 0.22);
-        B *= (1 + tint * 0.22);
+        R += spec * 52; G += spec * 48; B += spec * 40;
 
-        var amt = v * 0.60;
-        d[k++] = R * amt;
-        d[k++] = G * amt;
-        d[k++] = B * amt;
+        var amt = v * 0.50;
+        R *= amt; G *= amt; B *= amt;
+        d[k++] = R > 255 ? 255 : R;
+        d[k++] = G > 255 ? 255 : G;
+        d[k++] = B > 255 ? 255 : B;
         k++;
       }
     }
@@ -182,32 +230,29 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.97;
+    ctx.globalAlpha = 0.96;
     ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
 
-  /* ---------- static speckle ----------
-     Fixed positions. Never moves, never scrolls. Only breathes
-     very slightly in brightness, like emulsion. */
+  /* ---------- static speckle (fixed; only breathes) ---------- */
   var speck = [];
   function initSpeck() {
     speck = [];
-    var n = Math.floor((W * H) / 2600);
+    var n = Math.floor((W * H) / 3200);
     for (var i = 0; i < n; i++) {
       speck.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        a: 0.010 + Math.random() * Math.random() * 0.055,
+        x: Math.random() * W, y: Math.random() * H,
+        a: 0.008 + Math.random() * Math.random() * 0.042,
         ph: Math.random() * TAU,
-        sp: 0.00018 + Math.random() * 0.00042
+        sp: 0.00018 + Math.random() * 0.00040
       });
     }
   }
   function drawSpeck(time) {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.fillStyle = 'rgb(206,226,236)';
+    ctx.fillStyle = 'rgb(238,228,212)';
     for (var i = 0; i < speck.length; i++) {
       var p = speck[i];
       ctx.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(time * p.sp + p.ph));
@@ -216,15 +261,15 @@
     ctx.restore();
   }
 
-  /* ---------- drifting washes ---------- */
+  /* ---------- warm washes ---------- */
   function ColorWash(seed) {
-    this.hueOffset = (seed % 4) * 13 - 19;
+    this.hueOffset = (seed % 4) * 7 - 10;
     this.radius = Math.max(W, H) * (0.36 + (seed % 4) * 0.13);
     this.orbitR = Math.min(W, H) * (0.15 + (seed % 3) * 0.16);
-    this.orbitSpeed = (0.000029 + (seed % 5) * 0.000014) * (REDUCED ? 0.3 : 1);
+    this.orbitSpeed = (0.000028 + (seed % 5) * 0.000013) * (REDUCED ? 0.3 : 1);
     this.phase = seed * 1.7;
     this.wobble = 0.55 + (seed % 3) * 0.2;
-    this.alpha = 0.026 + (seed % 3) * 0.009;
+    this.alpha = 0.024 + (seed % 3) * 0.008;
   }
   ColorWash.prototype.draw = function (t) {
     var hue = (baseHue(t) + this.hueOffset) % 360;
@@ -233,9 +278,9 @@
     var cy = H * 0.5 + Math.sin(ang * this.wobble) * this.orbitR * 0.75;
     var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, this.radius);
     var h = hue.toFixed(1);
-    g.addColorStop(0, 'hsla(' + h + ', 58%, 46%, ' + this.alpha.toFixed(4) + ')');
-    g.addColorStop(0.55, 'hsla(' + h + ', 58%, 40%, ' + (this.alpha * 0.4).toFixed(4) + ')');
-    g.addColorStop(1, 'hsla(' + h + ', 58%, 36%, 0)');
+    g.addColorStop(0, 'hsla(' + h + ', 34%, 48%, ' + this.alpha.toFixed(4) + ')');
+    g.addColorStop(0.55, 'hsla(' + h + ', 34%, 40%, ' + (this.alpha * 0.4).toFixed(4) + ')');
+    g.addColorStop(1, 'hsla(' + h + ', 34%, 34%, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   };
@@ -268,8 +313,8 @@
     this.t = i * 11;
     this.points = [];
     this.maxPoints = 720;
-    this.lineWidth = 0.85 + (i % 3) * 0.28;
-    this.hueOffset = i * 10 - 16;
+    this.lineWidth = 1.05 + (i % 3) * 0.32;
+    this.hueOffset = i * 6 - 8;
     this.cur = this.randParams(this.seed);
     this.tgt = this.randParams(this.seed + 13);
     this.morphEvery = 26000 + i * 5200;
@@ -306,8 +351,7 @@
     this.forcedType = null;
     this.mode = 'wave';
     this.wave = {
-      type: type,
-      start: time,
+      type: type, start: time,
       dur: 6000 + Math.random() * 4200,
       cycles: 3 + ((Math.random() * 6) | 0),
       amp: H * (0.042 + Math.random() * 0.085),
@@ -339,9 +383,7 @@
       var w = this.wave;
       var uu = (time - w.start) / w.dur;
       if (uu >= 1) {
-        this.mode = 'wander';
-        this.wave = null;
-        this.schedule(time);
+        this.mode = 'wander'; this.wave = null; this.schedule(time);
       } else {
         var qx = -0.12 * W + uu * 1.24 * W;
         var qy = w.baseY + w.amp * waveValue(w.type, uu * w.cycles * TAU, this.seed);
@@ -358,19 +400,34 @@
     var hue = (baseHue(time) + this.hueOffset) % 360;
     var BANDS = 14;
     var per = Math.max(2, Math.floor(pts.length / BANDS));
-    var boost = (this.mode === 'wave') ? 1.5 : 1;
+    var boost = (this.mode === 'wave') ? 1.6 : 1;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+
+    /* dark underdraw keeps the line readable over bright struts */
     for (var b = 0; b < BANDS; b++) {
-      var s = b * per;
-      var e = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
+      var s0 = b * per;
+      var e0 = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s0 + per + 1);
+      if (e0 - s0 < 2) continue;
+      var k0 = (b + 1) / BANDS;
+      ctx.beginPath();
+      ctx.moveTo(pts[s0].x, pts[s0].y);
+      for (var i0 = s0 + 1; i0 < e0; i0++) ctx.lineTo(pts[i0].x, pts[i0].y);
+      ctx.strokeStyle = 'rgba(18,12,7,' + (0.030 + 0.115 * k0 * k0 * boost).toFixed(4) + ')';
+      ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k0) + 2.4;
+      ctx.stroke();
+    }
+    /* bright core */
+    for (var b2 = 0; b2 < BANDS; b2++) {
+      var s = b2 * per;
+      var e = (b2 === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
       if (e - s < 2) continue;
-      var k = (b + 1) / BANDS;
-      var a = 0.014 + 0.094 * k * k * boost;
+      var k = (b2 + 1) / BANDS;
+      var a = 0.030 + 0.210 * k * k * boost;
       ctx.beginPath();
       ctx.moveTo(pts[s].x, pts[s].y);
       for (var i = s + 1; i < e; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 44%, 68%, ' + a.toFixed(4) + ')';
+      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 30%, 93%, ' + a.toFixed(4) + ')';
       ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k);
       ctx.stroke();
     }
@@ -399,9 +456,21 @@
   /* ---------- backdrop ---------- */
   function drawBackdrop(t) {
     var hue = baseHue(t);
-    var g = ctx.createRadialGradient(W * 0.5, H * 0.46, 0, W * 0.5, H * 0.46, Math.max(W, H) * 0.78);
-    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 36%, 15%, 0.055)');
-    g.addColorStop(1, 'hsla(' + ((hue + 22) % 360).toFixed(1) + ', 38%, 4%, 0.055)');
+    var g = ctx.createRadialGradient(W * 0.5, H * 0.44, 0, W * 0.5, H * 0.44, Math.max(W, H) * 0.80);
+    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 24%, 14%, 0.060)');
+    g.addColorStop(1, 'hsla(' + ((hue - 10 + 360) % 360).toFixed(1) + ', 30%, 4%, 0.060)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  /* ---------- legibility scrim ----------
+     Darkens the lower-left corner under the wordmark so the
+     lattice can be bright without eating the text. */
+  function drawScrim() {
+    var g = ctx.createRadialGradient(W * 0.06, H * 0.97, 0, W * 0.06, H * 0.97, Math.max(W, H) * 0.62);
+    g.addColorStop(0, 'rgba(10,7,4,0.50)');
+    g.addColorStop(0.55, 'rgba(10,7,4,0.20)');
+    g.addColorStop(1, 'rgba(10,7,4,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -416,7 +485,7 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.fillStyle = '#05070a';
+    ctx.fillStyle = '#0b0805';
     ctx.fillRect(0, 0, W, H);
     initField();
     initWashes();
@@ -436,15 +505,12 @@
     if (!(dt > 0) || dt > 48) dt = 16.7;
     last = time;
 
-    ctx.fillStyle = 'rgba(5,7,10,0.032)';
+    ctx.fillStyle = 'rgba(11,8,5,0.034)';
     ctx.fillRect(0, 0, W, H);
 
     drawBackdrop(time);
     for (var i = 0; i < washes.length; i++) washes[i].draw(time);
-    for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
-    /* one strip per frame; all strips share a single timestamp so the
-       field stays internally consistent and never tears */
     if (strip === 0) renderT = time;
     renderStrip(renderT, strip);
     strip++;
@@ -452,6 +518,10 @@
 
     drawField();
     if (frame % 2 === 0) drawSpeck(time);
+    drawScrim();
+
+    /* lines sit above the lattice so they stay readable */
+    for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
     frame++;
     requestAnimationFrame(animate);

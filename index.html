@@ -20,9 +20,17 @@
   <span class="word">releases</span>
 </a>
 
+<div class="annotation" id="annotation">
+  <span>calcium carbonate — calcite.</span>
+  <span>in the inner ear these crystals tell the body which way is down.</span>
+  <span class="dim">when one works loose, the horizon tilts.</span>
+</div>
+
 <div class="overlay">
   <h1 class="name">presquestable</h1>
 </div>
+
+<div class="copyright">© 2026 presque stable</div>
 
 <script src="ps-engine.js"></script>
 <script>
@@ -33,15 +41,45 @@
 
   /* Positioned exactly once, while still invisible, then faded in.
      The element never moves after it becomes visible. */
+  var note = document.getElementById('annotation');
+
   /* avoid the wordmark and the rotating structure at centre screen */
   function avoidList() {
     return [name, PS.moleculeBox()];
   }
 
+  /* Place the annotation once, clear of the wordmark, the structure
+     and the releases link. Align it toward whichever edge it sits
+     nearer, so the text reads outward rather than into the centre. */
+  function placeNote() {
+    if (!window.PS) return;
+    note.style.opacity = '0';
+    note.style.textAlign = 'left';
+    PS.placeRandom(note, {
+      avoid: [name, PS.moleculeBox(), link],
+      marginX: 0.05, marginY: 0.10, pad: 46
+    });
+    var r = note.getBoundingClientRect();
+    var onRight = (r.left + r.width / 2) > window.innerWidth / 2;
+    if (onRight) {
+      /* pin to its right edge so the block grows leftward */
+      note.style.left = Math.round(r.right - note.offsetWidth) + 'px';
+      note.style.textAlign = 'right';
+    } else {
+      note.style.textAlign = 'left';
+    }
+  }
+
+  /* Engine reports hover strength each frame. */
+  window.PS_onHover = function (v) {
+    note.style.opacity = (v * 0.92).toFixed(3);
+  };
+
   function placeOnce() {
     if (done || !window.PS) return;
     done = true;
     PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
+    placeNote();
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { link.classList.add('ready'); });
     });
@@ -62,7 +100,9 @@
   window.addEventListener('resize', function () {
     clearTimeout(t);
     t = setTimeout(function () {
-      if (window.PS) PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
+      if (!window.PS) return;
+      PS.placeRandom(link, { avoid: avoidList(), marginX: 0.09, marginY: 0.11, pad: 90 });
+      placeNote();
     }, 220);
   });
 })();

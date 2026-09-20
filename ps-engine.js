@@ -400,6 +400,35 @@
     }
   }
 
+  /* ---------- hover state ----------
+     Pointer proximity to the structure drives a single eased value.
+     0 = at rest, 1 = fully expanded. */
+  var hoverTarget = 0, hoverEase = 0;
+  var pointerX = -1e5, pointerY = -1e5;
+
+  function updateHover(dt) {
+    var b = moleculeBox();
+    var inside = pointerX >= b.left && pointerX <= b.right &&
+                 pointerY >= b.top && pointerY <= b.bottom;
+    hoverTarget = inside ? 1 : 0;
+    /* time constants: ~520 ms to open, ~900 ms to settle back */
+    var tau = (hoverTarget > hoverEase) ? 180 : 320;
+    var k = dt / tau;
+    if (k > 1) k = 1;
+    hoverEase += (hoverTarget - hoverEase) * k;
+    if (hoverEase < 0.0004) hoverEase = 0;
+    if (hoverEase > 0.9996) hoverEase = 1;
+
+    if (window.PS_onHover) window.PS_onHover(hoverEase, MOL_CX());
+  }
+
+  window.addEventListener('pointermove', function (e) {
+    pointerX = e.clientX; pointerY = e.clientY;
+  }, { passive: true });
+  window.addEventListener('pointerleave', function () {
+    pointerX = pointerY = -1e5;
+  }, { passive: true });
+
   function drawMolecule(time) {
     if (!ATOMS.length) return;
 
@@ -418,12 +447,17 @@
     var camD = 3.4;
     var i, a;
 
+    /* explode: bond lengths grow ~18% at full hover */
+    var ex = 1 + hoverEase * 0.18;
+
     for (i = 0; i < ATOMS.length; i++) {
       a = ATOMS[i];
-      var x1 = a.x * cY + a.z * sY;
-      var z1 = -a.x * sY + a.z * cY;
-      var y2 = a.y * cX - z1 * sX;
-      var z2 = a.y * sX + z1 * cX;
+      /* scale all three axes before rotating, or the structure shears */
+      var ax = a.x * ex, ay = a.y * ex, az = a.z * ex;
+      var x1 = ax * cY + az * sY;
+      var z1 = -ax * sY + az * cY;
+      var y2 = ay * cX - z1 * sX;
+      var z2 = ay * sX + z1 * cX;
       var x3 = x1 * cZ - y2 * sZ;
       var y3 = x1 * sZ + y2 * cZ;
       var f = camD / (camD + z2 / MOL_R);
@@ -515,8 +549,12 @@
   });
 
   /* ---------- loop ---------- */
-  var frame = 0;
+  var frame = 0, lastT = 0;
   function animate(time) {
+    var dtHover = time - lastT;
+    if (!(dtHover > 0) || dtHover > 48) dtHover = 16.7;
+    lastT = time;
+
     ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, W, H);
 
@@ -535,6 +573,7 @@
     drawNoise();
     if (frame % 2 === 0) drawGrain(time);
 
+    updateHover(dtHover);
     drawMolecule(time);
 
     drawScrim();

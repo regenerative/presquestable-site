@@ -52,7 +52,7 @@
     setTimeout(placeOnce, 800);
   }
 
-  /* Reposition only if the window is actually resized. */
+  /* Reposition only on an actual window resize. */
   var t = null;
   window.addEventListener('resize', function () {
     clearTimeout(t);

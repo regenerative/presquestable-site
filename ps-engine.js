@@ -1,6 +1,6 @@
 /* ============================================================
    Presque Stable — background engine
-   Soft morphing colour field (original style)
+   Soft morphing colour field + otoconia crystal layer
    Shared by index.html and releases.html
    ============================================================ */
 (function () {
@@ -63,7 +63,6 @@
 
   var PALETTE = [190, 208, 228, 252, 276, 300, 328, 348, 18, 40, 62, 150, 172];
   var ANCHOR_MS = REDUCED ? 110000 : 52000;
-  /* random entry point so the page does not always open on the same hue */
   var HUE_SEED = Math.random() * PALETTE.length * ANCHOR_MS;
 
   function baseHue(t) {
@@ -76,9 +75,7 @@
   }
 
   /* ============================================================
-     MORPHING NOISE FIELD
-     Soft evolving cloud. Evolves on its own axis — no translation,
-     so nothing slides in any direction.
+     MORPHING NOISE FIELD  (base — unchanged)
      ============================================================ */
   var NW = 150, NH = 84;
   var nCanvas = null, nCtx = null, nImg = null, nData = null;
@@ -118,7 +115,6 @@
       for (var x = 0; x < NW; x++) {
         var px = (x / NW) * 2.6 * ar;
 
-        /* gentle domain warp keeps it organic without hard structure */
         var q1 = fbm(px, py, z1, 2);
         var q2 = fbm(px + 5.2, py + 1.3, z1, 2);
         var ax = px + 1.5 * (q1 - 0.5);
@@ -128,12 +124,10 @@
         var soft = fbm(ax * 0.55 + 3.1, ay * 0.55 - 1.7, z3, 2);
         v = v * 0.70 + soft * 0.30;
 
-        /* wide soft contrast — clouds, not edges */
         v = (v - 0.26) / 0.48;
         v = v < 0 ? 0 : (v > 1 ? 1 : v);
         v = v * v * (3 - 2 * v);
 
-        /* local hue varies across the field so colour reads in one frame */
         var mix = (q1 - q2) * 1.2 + 0.5;
         mix = mix < 0 ? 0 : (mix > 1 ? 1 : mix);
 
@@ -150,7 +144,6 @@
           B = cMid[2] + (cHi[2] - cMid[2]) * u2;
         }
 
-        /* hue-shift the mix so regions differ in colour */
         var tint = (mix - 0.5) * 0.30;
         R *= (1 - tint); B *= (1 + tint);
 
@@ -175,7 +168,7 @@
     ctx.restore();
   }
 
-  /* ---------- drifting colour washes ---------- */
+  /* ---------- drifting colour washes  (base — unchanged) ---------- */
   function ColorWash(seed) {
     this.hueOffset = (seed % 4) * 32 - 48;
     this.radius = Math.max(W, H) * (0.34 + (seed % 4) * 0.13);
@@ -204,7 +197,7 @@
     for (var i = 0; i < 6; i++) washes.push(new ColorWash(i * 2.3 + 1));
   }
 
-  /* ---------- fine grain (fixed positions, only breathes) ---------- */
+  /* ---------- fine grain  (base — unchanged) ---------- */
   var grain = [];
   function initGrain() {
     grain = [];
@@ -226,6 +219,223 @@
       var p = grain[i];
       ctx.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(time * p.sp + p.ph));
       ctx.fillRect(p.x, p.y, 1, 1);
+    }
+    ctx.restore();
+  }
+
+  /* ============================================================
+     OTOCONIA LAYER  (addition)
+
+     Calcium-carbonate crystals resting on a gel bed in the inner
+     ear. A gravity vector drifts and never settles; the crystals
+     lag behind it, lean, and resettle. Tip links between
+     neighbours show only when strained. Rarely one detaches and
+     drifts across the field before rejoining.
+     ============================================================ */
+
+  var crystals = [], links = [], loose = null, nextLooseAt = 0;
+
+  /* gravity direction — a slow irrational drift, never repeating */
+  var gx = 0, gy = 1, gAng = Math.PI / 2;
+  function updateGravity(time) {
+    var s = REDUCED ? 0.35 : 1;
+    var a = Math.sin(time * 0.0000362 * s) * 0.55
+          + Math.sin(time * 0.0000149 * s + 2.1) * 0.34
+          + Math.sin(time * 0.0000083 * s + 4.7) * 0.22;
+    gAng = Math.PI / 2 + a;          /* wanders around "down" */
+    gx = Math.cos(gAng);
+    gy = Math.sin(gAng);
+  }
+
+  function initCrystals() {
+    crystals = [];
+    links = [];
+    loose = null;
+    nextLooseAt = 14000 + Math.random() * 26000;
+
+    var n = Math.round((W * H) / 20000);
+    if (n < 24) n = 24;
+    if (n > 110) n = 110;
+
+    /* jittered grid so spacing stays even but not regular */
+    var cols = Math.max(4, Math.round(Math.sqrt(n * (W / H))));
+    var rows = Math.max(3, Math.ceil(n / cols));
+    var cw = W / cols, ch = H / rows;
+
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        if (crystals.length >= n) break;
+        crystals.push({
+          hx: (c + 0.5) * cw + (Math.random() - 0.5) * cw * 0.72,
+          hy: (r + 0.5) * ch + (Math.random() - 0.5) * ch * 0.72,
+          ox: 0, oy: 0, vx: 0, vy: 0,
+          /* heavier crystals lag further — this is the inertia */
+          mass: 0.55 + Math.random() * 0.85,
+          k: 0.0016 + Math.random() * 0.0022,      /* spring to home */
+          size: 1.5 + Math.random() * Math.random() * 3.4,
+          ang: Math.random() * TAU,
+          angBias: (Math.random() - 0.5) * 1.5,
+          angLag: 0.006 + Math.random() * 0.016,
+          flash: 0,
+          state: 0                                  /* 0 settled, 1 loose */
+        });
+      }
+    }
+
+    /* tip links: nearest neighbours only, computed once */
+    var maxD = Math.min(W, H) * 0.14;
+    for (var i = 0; i < crystals.length; i++) {
+      var a = crystals[i], found = 0;
+      for (var j = i + 1; j < crystals.length && found < 2; j++) {
+        var b = crystals[j];
+        var dx = b.hx - a.hx, dy = b.hy - a.hy;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d < maxD) {
+          links.push({ a: i, b: j, rest: d, flash: 0 });
+          found++;
+        }
+      }
+    }
+  }
+
+  function updateCrystals(time, dt) {
+    var f = dt / 16.667;
+    if (f > 3) f = 3;
+
+    for (var i = 0; i < crystals.length; i++) {
+      var p = crystals[i];
+
+      if (p.state === 1) {
+        /* detached: drifts with gravity, slowly re-homes */
+        p.ox += p.vx * f;
+        p.oy += p.vy * f;
+        p.vx += gx * 0.0042 * f;
+        p.vy += gy * 0.0042 * f;
+        p.vx *= 0.995; p.vy *= 0.995;
+        p.ang += 0.004 * f;
+        var px = p.hx + p.ox, py = p.hy + p.oy;
+        if (px < -60 || px > W + 60 || py < -60 || py > H + 60) {
+          /* rejoin somewhere new */
+          p.hx = 40 + Math.random() * (W - 80);
+          p.hy = 40 + Math.random() * (H - 80);
+          p.ox = p.oy = p.vx = p.vy = 0;
+          p.state = 0;
+          loose = null;
+        }
+      } else {
+        /* settled: spring to home + pull along gravity, damped */
+        var ax = -p.k * p.ox + gx * 0.055 * p.mass;
+        var ay = -p.k * p.oy + gy * 0.055 * p.mass;
+        p.vx = (p.vx + ax * f) * 0.962;
+        p.vy = (p.vy + ay * f) * 0.962;
+        p.ox += p.vx * f;
+        p.oy += p.vy * f;
+      }
+
+      /* orientation eases toward gravity, each at its own rate */
+      var target = gAng + p.angBias;
+      var da = target - p.ang;
+      while (da > Math.PI) da -= TAU;
+      while (da < -Math.PI) da += TAU;
+      p.ang += da * p.angLag * f;
+
+      if (p.flash > 0) p.flash -= 0.022 * f;
+    }
+
+    /* detachment: one at a time, rarely */
+    if (!REDUCED && !loose && time > nextLooseAt) {
+      var pick = crystals[(Math.random() * crystals.length) | 0];
+      if (pick && pick.state === 0) {
+        pick.state = 1;
+        pick.vx = (Math.random() - 0.5) * 0.22;
+        pick.vy = (Math.random() - 0.5) * 0.22;
+        pick.flash = 1;
+        loose = pick;
+      }
+      nextLooseAt = time + 26000 + Math.random() * 44000;
+    }
+
+    /* tip-link strain */
+    for (var L = 0; L < links.length; L++) {
+      var l = links[L];
+      var A = crystals[l.a], B = crystals[l.b];
+      if (A.state || B.state) { l.strain = 0; continue; }
+      var dx = (B.hx + B.ox) - (A.hx + A.ox);
+      var dy = (B.hy + B.oy) - (A.hy + A.oy);
+      var d = Math.sqrt(dx * dx + dy * dy);
+      var s = (d - l.rest) / l.rest;
+      l.strain = s > 0 ? s : 0;
+      /* past threshold the link releases with a brief flash */
+      if (l.strain > 0.052 && l.flash <= 0) {
+        l.flash = 1;
+        A.flash = 1; B.flash = 1;
+      }
+      if (l.flash > 0) l.flash -= 0.020 * f;
+    }
+  }
+
+  function drawCrystals(time) {
+    var hue = baseHue(time);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+
+    /* --- tip links: only visible under tension --- */
+    ctx.lineCap = 'round';
+    for (var L = 0; L < links.length; L++) {
+      var l = links[L];
+      if (!l.strain && l.flash <= 0) continue;
+      var A = crystals[l.a], B = crystals[l.b];
+      var a = l.strain * 2.6;
+      if (l.flash > 0) a += l.flash * 0.22;
+      if (a <= 0.004) continue;
+      if (a > 0.20) a = 0.20;
+      ctx.beginPath();
+      ctx.moveTo(A.hx + A.ox, A.hy + A.oy);
+      ctx.lineTo(B.hx + B.ox, B.hy + B.oy);
+      ctx.strokeStyle = 'hsla(' + ((hue - 16 + 360) % 360).toFixed(1) +
+                        ', 70%, 80%, ' + a.toFixed(4) + ')';
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+    }
+
+    /* --- crystals --- */
+    for (var i = 0; i < crystals.length; i++) {
+      var p = crystals[i];
+      var x = p.hx + p.ox, y = p.hy + p.oy;
+
+      /* birefringence: calcite splits light by orientation, so hue
+         comes from how the crystal sits relative to gravity */
+      var rel = p.ang - gAng;
+      var bi = Math.sin(rel * 2);
+      var h = (hue + bi * 46 + 360) % 360;
+      var lum = 0.66 + 0.20 * Math.cos(rel * 2);
+
+      var a = 0.070 + 0.055 * Math.abs(bi);
+      if (p.state === 1) a *= 1.7;
+      if (p.flash > 0) a += p.flash * 0.10;
+
+      var s = p.size;
+      var ca = Math.cos(p.ang), sa = Math.sin(p.ang);
+
+      /* rhombohedral facet — a small leaning diamond */
+      ctx.beginPath();
+      ctx.moveTo(x + ca * s * 1.7, y + sa * s * 1.7);
+      ctx.lineTo(x - sa * s * 0.72, y + ca * s * 0.72);
+      ctx.lineTo(x - ca * s * 1.7, y - sa * s * 1.7);
+      ctx.lineTo(x + sa * s * 0.72, y - ca * s * 0.72);
+      ctx.closePath();
+      ctx.fillStyle = 'hsla(' + h.toFixed(1) + ', 78%, ' +
+                      (lum * 100).toFixed(0) + '%, ' + a.toFixed(4) + ')';
+      ctx.fill();
+
+      /* lit edge along the long axis */
+      ctx.beginPath();
+      ctx.moveTo(x + ca * s * 1.7, y + sa * s * 1.7);
+      ctx.lineTo(x - sa * s * 0.72, y + ca * s * 0.72);
+      ctx.strokeStyle = 'hsla(' + h.toFixed(1) + ', 62%, 92%, ' +
+                        (a * 0.85).toFixed(4) + ')';
+      ctx.lineWidth = 0.55;
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -265,6 +475,7 @@
     initNoise();
     initWashes();
     initGrain();
+    initCrystals();
   }
   var resizeTimer = null;
   window.addEventListener('resize', function () {
@@ -273,10 +484,12 @@
   });
 
   /* ---------- loop ---------- */
-  var frame = 0;
+  var frame = 0, last = 0;
   function animate(time) {
-    /* opaque clear — a partial fade would let the screen blend
-       accumulate frame over frame and bleach everything white */
+    var dt = time - last;
+    if (!(dt > 0) || dt > 48) dt = 16.7;
+    last = time;
+
     ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, W, H);
 
@@ -294,6 +507,11 @@
 
     drawNoise();
     if (frame % 2 === 0) drawGrain(time);
+
+    updateGravity(time);
+    updateCrystals(time, dt);
+    drawCrystals(time);
+
     drawScrim();
 
     frame++;

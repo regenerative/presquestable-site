@@ -62,8 +62,8 @@ html, body {
 
 /* ============================================================
    releases link
-   No background pad. Legibility comes from text-shadow only.
-   Hidden until positioned, then fades in once — never jumps.
+   No background pad — legibility from text-shadow only.
+   Hidden until positioned, then fades in once. Never jumps.
    ============================================================ */
 
 .releases {

@@ -1,6 +1,6 @@
 /* ============================================================
    Presque Stable — background engine
-   Trabecular / cellular lattice, warm bone palette
+   High-resolution morphing cellular lattice
    Shared by index.html and releases.html
    ============================================================ */
 (function () {
@@ -47,39 +47,6 @@
     return 0.5 * vnoise(x, y, z) + 0.25 * vnoise(x * 2.03, y * 2.03, z * 1.4);
   }
 
-  /* ---------- cellular (Worley) ----------
-     Feature points orbit slowly, so the lattice flexes in place
-     like living tissue. F2-F1 is small on a cell boundary, which
-     is what draws the struts. */
-  var wF1 = 0, wF2 = 0;
-  function worley(x, y, t, seed) {
-    var ix = Math.floor(x), iy = Math.floor(y);
-    var f1 = 1e9, f2 = 1e9;
-    for (var gy = -1; gy <= 1; gy++) {
-      for (var gx = -1; gx <= 1; gx++) {
-        var cx = ix + gx, cy = iy + gy;
-        var a = hash2i(cx, cy, seed) * TAU;
-        var b = hash2i(cx, cy, seed + 977) * TAU;
-        var sp = 0.35 + hash2i(cx, cy, seed + 311) * 0.65;
-        var px = cx + 0.5 + 0.42 * Math.sin(a + t * sp);
-        var py = cy + 0.5 + 0.42 * Math.cos(b + t * sp * 0.87);
-        var dx = px - x, dy = py - y;
-        var d = dx * dx + dy * dy;
-        if (d < f1) { f2 = f1; f1 = d; }
-        else if (d < f2) { f2 = d; }
-      }
-    }
-    wF1 = Math.sqrt(f1);
-    wF2 = Math.sqrt(f2);
-    return wF2 - wF1;
-  }
-
-  /* strut mask: bright on cell walls, dark inside cells */
-  function strut(x, y, t, seed, thick) {
-    var e = worley(x, y, t, seed);
-    return 1 - sstep(0, thick, e);
-  }
-
   /* ---------- colour ---------- */
   function hue2rgb(p, q, t) {
     if (t < 0) t += 1;
@@ -97,10 +64,10 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Warm bone / ivory / sand. Low saturation so it reads as bone,
-     not orange. Never enters the blue half of the wheel. */
-  var PALETTE = [34, 30, 26, 38, 42, 46, 36, 31];
-  var ANCHOR_MS = REDUCED ? 460000 : 200000;
+  /* Original spectrum, weighted toward blue: five cool anchors,
+     two violet, two brief warm accents. Full colour, not brown. */
+  var PALETTE = [198, 211, 224, 240, 256, 288, 330, 22, 44, 176];
+  var ANCHOR_MS = REDUCED ? 380000 : 155000;
   function baseHue(t) {
     var p = t / ANCHOR_MS;
     var i = Math.floor(p) % PALETTE.length;
@@ -111,114 +78,227 @@
   }
 
   /* ============================================================
-     TRABECULAR FIELD
-     Three depth layers of warped cellular noise:
-       far  — fine mesh, dim, recedes
-       mid  — medium lattice
-       near — heavy struts, bright, catches the light
+     CELL GRID
+     Feature points are precomputed once per field pass, so the
+     per-pixel inner loop is nine distance checks and nothing
+     more. That is what makes high resolution affordable.
      ============================================================ */
-  var FW = 150, FH = 84;
-  var fCanvas = null, fCtx = null, fImg = null;
-  var strip = 0, STRIPS = 3, renderT = 0;
+  function CellGrid() {
+    this.pts = null; this.nx = 0; this.ny = 0;
+    this.x0 = 0; this.y0 = 0; this.scale = 1; this.ox = 0; this.oy = 0;
+  }
+  CellGrid.prototype.build = function (scale, ox, oy, seed, t, ar, margin) {
+    this.scale = scale; this.ox = ox; this.oy = oy;
+    this.x0 = Math.floor(-margin * scale + ox) - 1;
+    this.y0 = Math.floor(-margin * scale + oy) - 1;
+    var x1 = Math.ceil((ar + margin) * scale + ox) + 1;
+    var y1 = Math.ceil((1 + margin) * scale + oy) + 1;
+    this.nx = x1 - this.x0 + 1;
+    this.ny = y1 - this.y0 + 1;
+    var need = this.nx * this.ny * 2;
+    if (!this.pts || this.pts.length < need) this.pts = new Float32Array(need);
+    var k = 0;
+    for (var cy = this.y0; cy <= y1; cy++) {
+      for (var cx = this.x0; cx <= x1; cx++) {
+        var a = hash2i(cx, cy, seed) * TAU;
+        var b = hash2i(cx, cy, seed + 977) * TAU;
+        var sp = 0.35 + hash2i(cx, cy, seed + 311) * 0.65;
+        this.pts[k++] = cx + 0.5 + 0.42 * Math.sin(a + t * sp);
+        this.pts[k++] = cy + 0.5 + 0.42 * Math.cos(b + t * sp * 0.87);
+      }
+    }
+  };
+
+  var gF1 = 0, gF2 = 0;
+  CellGrid.prototype.sample = function (sx, sy) {
+    var ix = Math.floor(sx), iy = Math.floor(sy);
+    var f1 = 1e9, f2 = 1e9;
+    var bx = ix - this.x0, by = iy - this.y0;
+    var nx = this.nx, ny = this.ny, pts = this.pts;
+    for (var gy = -1; gy <= 1; gy++) {
+      var ry = by + gy;
+      if (ry < 0 || ry >= ny) continue;
+      var row = ry * nx;
+      for (var gx = -1; gx <= 1; gx++) {
+        var rx = bx + gx;
+        if (rx < 0 || rx >= nx) continue;
+        var p = (row + rx) * 2;
+        var dx = pts[p] - sx, dy = pts[p + 1] - sy;
+        var d = dx * dx + dy * dy;
+        if (d < f1) { f2 = f1; f1 = d; }
+        else if (d < f2) { f2 = d; }
+      }
+    }
+    gF1 = Math.sqrt(f1);
+    gF2 = Math.sqrt(f2);
+    return gF2 - gF1;
+  };
+
+  /* ============================================================
+     FIELD
+     ============================================================ */
+  var FW = 0, FH = 0;
+  var fCanvas = null, fCtx = null, fImg = null, fData = null;
+  var phase = 0, STRIPS = 20, renderT = 0;
+
+  var gNear = new CellGrid(), gMid = new CellGrid(), gFar = new CellGrid();
+
+  /* low-res warp buffer, bilinear-sampled per pixel */
+  var WWX = 80, WWY = 46, warpA = null, warpB = null;
+
+  /* palette LUT: hue offset steps x 3 stops */
+  var LUT_N = 40, lutDeep = null, lutMid = null, lutHi = null;
 
   function initField() {
-    FH = Math.max(56, Math.round(FW * (H / Math.max(1, W))));
+    var target = Math.min(520, Math.max(300, Math.round(W * 0.40)));
+    FW = target;
+    FH = Math.max(120, Math.round(FW * (H / Math.max(1, W))));
     fCanvas = document.createElement('canvas');
     fCanvas.width = FW; fCanvas.height = FH;
     fCtx = fCanvas.getContext('2d');
     fImg = fCtx.createImageData(FW, FH);
-    var d = fImg.data;
-    for (var i = 3; i < d.length; i += 4) d[i] = 255;
-    for (var s = 0; s < STRIPS; s++) renderStrip(0, s);
+    fData = fImg.data;
+    for (var i = 3; i < fData.length; i += 4) fData[i] = 255;
+
+    WWY = Math.max(28, Math.round(WWX * (FH / FW)));
+    warpA = new Float32Array(WWX * WWY);
+    warpB = new Float32Array(WWX * WWY);
+
+    lutDeep = new Float32Array(LUT_N * 3);
+    lutMid = new Float32Array(LUT_N * 3);
+    lutHi = new Float32Array(LUT_N * 3);
+
+    prepField(0);
+    for (var s = 0; s < STRIPS; s++) renderStrip(s);
     fCtx.putImageData(fImg, 0, 0);
   }
 
-  function renderStrip(time, s) {
-    if (!fImg) return;
-    var d = fImg.data;
-    var zs = REDUCED ? 0.3 : 1;
+  var pAr = 1, pTooth = 0, pTb = 0;
 
-    var tw = time * 0.0000165 * zs;          /* warp evolution   */
-    var tc = time * 0.0000430 * zs;          /* cell flexing     */
-    var tb = time * 0.0000240 * zs + 61.3;   /* thickness breath */
+  /* Called once per full field pass. All the expensive setup
+     lives here so the per-pixel loop stays tight. */
+  function prepField(time) {
+    var zs = REDUCED ? 0.35 : 1;
+    var tw = time * 0.0000290 * zs;
+    var tc = time * 0.0000760 * zs;
+    var tb = time * 0.0000420 * zs + 61.3;
+    pTb = tb;
+    pAr = FW / FH;
+    pTooth = 78;
 
+    /* warp field */
+    var k = 0;
+    for (var y = 0; y < WWY; y++) {
+      var py = (y / (WWY - 1)) * 1.6;
+      for (var x = 0; x < WWX; x++) {
+        var px = (x / (WWX - 1)) * pAr * 1.6;
+        warpA[k] = fbm2(px, py, tw) - 0.5;
+        warpB[k] = fbm2(px + 7.3, py + 2.1, tw) - 0.5;
+        k++;
+      }
+    }
+
+    /* cell grids */
+    gFar.build(15.5, 0, 0, 11, tc, pAr, 0.5);
+    gMid.build(8.2, 4.0, 1.5, 29, tc * 0.86, pAr, 0.5);
+    gNear.build(4.3, 1.7, 6.2, 47, tc * 0.70, pAr, 0.5);
+
+    /* colour LUT — local hue varies +/-26 deg across the field */
     var hue = baseHue(time);
-    var cDeep = hsl2rgb(hue + 6,  0.26, 0.16);   /* cavity        */
-    var cMid  = hsl2rgb(hue,      0.20, 0.52);   /* strut body    */
-    var cHi   = hsl2rgb(hue - 5,  0.11, 0.88);   /* lit edge      */
+    for (var i = 0; i < LUT_N; i++) {
+      var off = (i / (LUT_N - 1) - 0.5) * 52;
+      var h = hue + off;
+      var a = hsl2rgb(h + 10, 0.52, 0.17);
+      var b = hsl2rgb(h, 0.44, 0.54);
+      var c = hsl2rgb(h - 14, 0.30, 0.88);
+      lutDeep[i * 3] = a[0]; lutDeep[i * 3 + 1] = a[1]; lutDeep[i * 3 + 2] = a[2];
+      lutMid[i * 3] = b[0]; lutMid[i * 3 + 1] = b[1]; lutMid[i * 3 + 2] = b[2];
+      lutHi[i * 3] = c[0]; lutHi[i * 3 + 1] = c[1]; lutHi[i * 3 + 2] = c[2];
+    }
+  }
 
+  function renderStrip(s) {
+    if (!fData) return;
     var y0 = Math.floor(FH * s / STRIPS);
     var y1 = Math.floor(FH * (s + 1) / STRIPS);
-    var ar = FW / FH;
+    var ar = pAr, tb = pTb, tooth = pTooth;
 
     for (var y = y0; y < y1; y++) {
       var py = y / FH;
+      var wy = py * (WWY - 1);
+      var wyi = wy | 0; if (wyi > WWY - 2) wyi = WWY - 2;
+      var wyf = wy - wyi;
       var k = (y * FW) * 4;
+
       for (var x = 0; x < FW; x++) {
         var px = (x / FW) * ar;
 
-        /* --- domain warp: bends the lattice organically --- */
-        var w1 = fbm2(px * 1.6, py * 1.6, tw);
-        var w2 = fbm2(px * 1.6 + 7.3, py * 1.6 + 2.1, tw);
-        var ux = px + 0.62 * (w1 - 0.5);
-        var uy = py + 0.62 * (w2 - 0.5);
+        /* --- bilinear warp lookup --- */
+        var wx = (x / FW) * (WWX - 1);
+        var wxi = wx | 0; if (wxi > WWX - 2) wxi = WWX - 2;
+        var wxf = wx - wxi;
+        var i00 = wyi * WWX + wxi, i10 = i00 + 1;
+        var i01 = i00 + WWX, i11 = i01 + 1;
+        var w1 = (warpA[i00] * (1 - wxf) + warpA[i10] * wxf) * (1 - wyf) +
+                 (warpA[i01] * (1 - wxf) + warpA[i11] * wxf) * wyf;
+        var w2 = (warpB[i00] * (1 - wxf) + warpB[i10] * wxf) * (1 - wyf) +
+                 (warpB[i01] * (1 - wxf) + warpB[i11] * wxf) * wyf;
 
-        /* --- thickness varies across the field --- */
-        var thickVar = fbm2(ux * 2.2 + 3.1, uy * 2.2 - 1.7, tb);
+        var ux = px + 0.62 * w1;
+        var uy = py + 0.62 * w2;
 
-        /* --- far layer: fine receding mesh --- */
-        var sFar = strut(ux * 15.5, uy * 15.5, tc, 11, 0.13 + thickVar * 0.05);
-        var farDepth = wF1;
+        /* --- three lattice layers --- */
+        var eFar = gFar.sample(ux * 15.5, uy * 15.5);
+        var sFar = 1 - sstep(0, 0.15, eFar);
+        var farDepth = gF1;
 
-        /* --- mid layer --- */
-        var sMid = strut(ux * 8.2 + 4.0, uy * 8.2 + 1.5, tc * 0.86, 29, 0.17 + thickVar * 0.07);
+        var eMid = gMid.sample(ux * 8.2 + 4.0, uy * 8.2 + 1.5);
+        var sMid = 1 - sstep(0, 0.20, eMid);
 
-        /* --- near layer: heavy struts --- */
-        var sNear = strut(ux * 4.3 + 1.7, uy * 4.3 + 6.2, tc * 0.7, 47, 0.24 + thickVar * 0.10);
-        var nearCore = wF1;
+        var eNear = gNear.sample(ux * 4.3 + 1.7, uy * 4.3 + 6.2);
+        var sNear = 1 - sstep(0, 0.28, eNear);
+        var nearCore = gF1;
 
-        /* --- composite with depth falloff --- */
         var v = sFar * 0.26 + sMid * 0.40 + sNear * 0.78;
-
-        /* occlusion: near struts shadow what sits behind them */
         v *= (1 - sNear * 0.30);
         v += sNear * 0.34;
 
-        /* specular bloom along the ridge of the near struts */
         var spec = sNear * (1 - sstep(0.0, 0.34, nearCore));
         spec = spec * spec;
 
-        /* fine surface tooth so it is never a flat gradient */
-        var tooth = vnoise(ux * 46, uy * 46, tb * 2.4);
-        v *= 0.90 + tooth * 0.20;
-
-        /* slight depth haze into the cavities */
+        /* fine surface tooth, now resolvable at this resolution */
+        var th = vnoise(ux * tooth, uy * tooth, tb * 2.4);
+        v *= 0.90 + th * 0.20;
         v *= 0.82 + 0.18 * (1 - sstep(0.1, 0.5, farDepth));
 
         v = v < 0 ? 0 : (v > 1 ? 1 : v);
         v = v * v * (3 - 2 * v);
 
-        /* --- three-stop ramp: cavity -> strut -> lit edge --- */
+        /* --- local hue from the warp vector --- */
+        var li = ((w1 - w2) * 1.1 + 0.5) * (LUT_N - 1);
+        li = li < 0 ? 0 : (li > LUT_N - 1 ? LUT_N - 1 : li) | 0;
+        var l3 = li * 3;
+
         var R, G, B;
         if (v < 0.52) {
           var u = v / 0.52;
-          R = cDeep[0] + (cMid[0] - cDeep[0]) * u;
-          G = cDeep[1] + (cMid[1] - cDeep[1]) * u;
-          B = cDeep[2] + (cMid[2] - cDeep[2]) * u;
+          R = lutDeep[l3] + (lutMid[l3] - lutDeep[l3]) * u;
+          G = lutDeep[l3 + 1] + (lutMid[l3 + 1] - lutDeep[l3 + 1]) * u;
+          B = lutDeep[l3 + 2] + (lutMid[l3 + 2] - lutDeep[l3 + 2]) * u;
         } else {
           var u2 = (v - 0.52) / 0.48;
-          R = cMid[0] + (cHi[0] - cMid[0]) * u2;
-          G = cMid[1] + (cHi[1] - cMid[1]) * u2;
-          B = cMid[2] + (cHi[2] - cMid[2]) * u2;
+          R = lutMid[l3] + (lutHi[l3] - lutMid[l3]) * u2;
+          G = lutMid[l3 + 1] + (lutHi[l3 + 1] - lutMid[l3 + 1]) * u2;
+          B = lutMid[l3 + 2] + (lutHi[l3 + 2] - lutMid[l3 + 2]) * u2;
         }
 
-        R += spec * 52; G += spec * 48; B += spec * 40;
+        R += spec * 46; G += spec * 50; B += spec * 58;
 
-        var amt = v * 0.50;
+        var amt = v * 0.56;
         R *= amt; G *= amt; B *= amt;
-        d[k++] = R > 255 ? 255 : R;
-        d[k++] = G > 255 ? 255 : G;
-        d[k++] = B > 255 ? 255 : B;
+        fData[k++] = R > 255 ? 255 : R;
+        fData[k++] = G > 255 ? 255 : G;
+        fData[k++] = B > 255 ? 255 : B;
         k++;
       }
     }
@@ -230,12 +310,12 @@
     ctx.globalCompositeOperation = 'screen';
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 0.96;
+    ctx.globalAlpha = 0.97;
     ctx.drawImage(fCanvas, 0, 0, W, H);
     ctx.restore();
   }
 
-  /* ---------- static speckle (fixed; only breathes) ---------- */
+  /* ---------- static speckle ---------- */
   var speck = [];
   function initSpeck() {
     speck = [];
@@ -252,7 +332,7 @@
   function drawSpeck(time) {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.fillStyle = 'rgb(238,228,212)';
+    ctx.fillStyle = 'rgb(214,232,240)';
     for (var i = 0; i < speck.length; i++) {
       var p = speck[i];
       ctx.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(time * p.sp + p.ph));
@@ -261,15 +341,15 @@
     ctx.restore();
   }
 
-  /* ---------- warm washes ---------- */
+  /* ---------- washes ---------- */
   function ColorWash(seed) {
-    this.hueOffset = (seed % 4) * 7 - 10;
+    this.hueOffset = (seed % 4) * 16 - 24;
     this.radius = Math.max(W, H) * (0.36 + (seed % 4) * 0.13);
     this.orbitR = Math.min(W, H) * (0.15 + (seed % 3) * 0.16);
-    this.orbitSpeed = (0.000028 + (seed % 5) * 0.000013) * (REDUCED ? 0.3 : 1);
+    this.orbitSpeed = (0.000040 + (seed % 5) * 0.000019) * (REDUCED ? 0.3 : 1);
     this.phase = seed * 1.7;
     this.wobble = 0.55 + (seed % 3) * 0.2;
-    this.alpha = 0.024 + (seed % 3) * 0.008;
+    this.alpha = 0.030 + (seed % 3) * 0.011;
   }
   ColorWash.prototype.draw = function (t) {
     var hue = (baseHue(t) + this.hueOffset) % 360;
@@ -278,9 +358,9 @@
     var cy = H * 0.5 + Math.sin(ang * this.wobble) * this.orbitR * 0.75;
     var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, this.radius);
     var h = hue.toFixed(1);
-    g.addColorStop(0, 'hsla(' + h + ', 34%, 48%, ' + this.alpha.toFixed(4) + ')');
-    g.addColorStop(0.55, 'hsla(' + h + ', 34%, 40%, ' + (this.alpha * 0.4).toFixed(4) + ')');
-    g.addColorStop(1, 'hsla(' + h + ', 34%, 34%, 0)');
+    g.addColorStop(0, 'hsla(' + h + ', 62%, 48%, ' + this.alpha.toFixed(4) + ')');
+    g.addColorStop(0.55, 'hsla(' + h + ', 62%, 41%, ' + (this.alpha * 0.4).toFixed(4) + ')');
+    g.addColorStop(1, 'hsla(' + h + ', 62%, 35%, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   };
@@ -314,7 +394,7 @@
     this.points = [];
     this.maxPoints = 720;
     this.lineWidth = 1.05 + (i % 3) * 0.32;
-    this.hueOffset = i * 6 - 8;
+    this.hueOffset = i * 9 - 14;
     this.cur = this.randParams(this.seed);
     this.tgt = this.randParams(this.seed + 13);
     this.morphEvery = 26000 + i * 5200;
@@ -404,7 +484,6 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    /* dark underdraw keeps the line readable over bright struts */
     for (var b = 0; b < BANDS; b++) {
       var s0 = b * per;
       var e0 = (b === BANDS - 1) ? pts.length : Math.min(pts.length, s0 + per + 1);
@@ -413,11 +492,10 @@
       ctx.beginPath();
       ctx.moveTo(pts[s0].x, pts[s0].y);
       for (var i0 = s0 + 1; i0 < e0; i0++) ctx.lineTo(pts[i0].x, pts[i0].y);
-      ctx.strokeStyle = 'rgba(18,12,7,' + (0.030 + 0.115 * k0 * k0 * boost).toFixed(4) + ')';
+      ctx.strokeStyle = 'rgba(4,7,12,' + (0.030 + 0.115 * k0 * k0 * boost).toFixed(4) + ')';
       ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k0) + 2.4;
       ctx.stroke();
     }
-    /* bright core */
     for (var b2 = 0; b2 < BANDS; b2++) {
       var s = b2 * per;
       var e = (b2 === BANDS - 1) ? pts.length : Math.min(pts.length, s + per + 1);
@@ -427,7 +505,7 @@
       ctx.beginPath();
       ctx.moveTo(pts[s].x, pts[s].y);
       for (var i = s + 1; i < e; i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 30%, 93%, ' + a.toFixed(4) + ')';
+      ctx.strokeStyle = 'hsla(' + hue.toFixed(1) + ', 58%, 88%, ' + a.toFixed(4) + ')';
       ctx.lineWidth = this.lineWidth * (0.7 + 0.55 * k);
       ctx.stroke();
     }
@@ -457,20 +535,18 @@
   function drawBackdrop(t) {
     var hue = baseHue(t);
     var g = ctx.createRadialGradient(W * 0.5, H * 0.44, 0, W * 0.5, H * 0.44, Math.max(W, H) * 0.80);
-    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 24%, 14%, 0.060)');
-    g.addColorStop(1, 'hsla(' + ((hue - 10 + 360) % 360).toFixed(1) + ', 30%, 4%, 0.060)');
+    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 40%, 15%, 0.060)');
+    g.addColorStop(1, 'hsla(' + ((hue + 26) % 360).toFixed(1) + ', 44%, 4%, 0.060)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
 
-  /* ---------- legibility scrim ----------
-     Darkens the lower-left corner under the wordmark so the
-     lattice can be bright without eating the text. */
+  /* ---------- legibility scrim ---------- */
   function drawScrim() {
     var g = ctx.createRadialGradient(W * 0.06, H * 0.97, 0, W * 0.06, H * 0.97, Math.max(W, H) * 0.62);
-    g.addColorStop(0, 'rgba(10,7,4,0.50)');
-    g.addColorStop(0.55, 'rgba(10,7,4,0.20)');
-    g.addColorStop(1, 'rgba(10,7,4,0)');
+    g.addColorStop(0, 'rgba(4,6,11,0.52)');
+    g.addColorStop(0.55, 'rgba(4,6,11,0.21)');
+    g.addColorStop(1, 'rgba(4,6,11,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -485,7 +561,7 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.fillStyle = '#0b0805';
+    ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, W, H);
     initField();
     initWashes();
@@ -505,22 +581,29 @@
     if (!(dt > 0) || dt > 48) dt = 16.7;
     last = time;
 
-    ctx.fillStyle = 'rgba(11,8,5,0.034)';
+    ctx.fillStyle = 'rgba(5,7,12,0.034)';
     ctx.fillRect(0, 0, W, H);
 
     drawBackdrop(time);
     for (var i = 0; i < washes.length; i++) washes[i].draw(time);
 
-    if (strip === 0) renderT = time;
-    renderStrip(renderT, strip);
-    strip++;
-    if (strip >= STRIPS) { fCtx.putImageData(fImg, 0, 0); strip = 0; }
+    /* phase 0 = setup only, phases 1..STRIPS = one strip each.
+       Decoupling setup from strip work keeps the worst frame at
+       a single unit of work instead of both at once. */
+    if (phase === 0) {
+      renderT = time;
+      prepField(renderT);
+    } else {
+      renderStrip(phase - 1);
+      if (phase === STRIPS) fCtx.putImageData(fImg, 0, 0);
+    }
+    phase++;
+    if (phase > STRIPS) phase = 0;
 
     drawField();
     if (frame % 2 === 0) drawSpeck(time);
     drawScrim();
 
-    /* lines sit above the lattice so they stay readable */
     for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
     frame++;

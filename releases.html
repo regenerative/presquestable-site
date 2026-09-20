@@ -21,22 +21,32 @@
 <script>
 (function () {
   var soon = document.getElementById('soon');
+  var done = false;
 
-  function place() {
-    if (window.PS) PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
+  /* Positioned once while invisible, then faded in. Never jumps. */
+  function placeOnce() {
+    if (done || !window.PS) return;
+    done = true;
+    PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { soon.classList.add('ready'); });
+    });
   }
 
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(place).catch(place);
+    document.fonts.ready.then(placeOnce).catch(placeOnce);
+    setTimeout(placeOnce, 1500);
   } else {
-    window.addEventListener('load', place);
+    window.addEventListener('load', placeOnce);
+    setTimeout(placeOnce, 800);
   }
-  setTimeout(place, 400);
 
   var t = null;
   window.addEventListener('resize', function () {
     clearTimeout(t);
-    t = setTimeout(place, 200);
+    t = setTimeout(function () {
+      if (window.PS) PS.placeRandom(soon, { marginX: 0.12, marginY: 0.16 });
+    }, 220);
   });
 
   /* Invisible way back — nothing is drawn for it.

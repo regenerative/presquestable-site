@@ -29,22 +29,36 @@
 (function () {
   var link = document.getElementById('releases');
   var name = document.querySelector('.name');
+  var done = false;
 
-  function place() {
-    if (window.PS) PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 90 });
+  /* Positioned exactly once, while still invisible, then faded in.
+     The element never moves after it becomes visible. */
+  function placeOnce() {
+    if (done || !window.PS) return;
+    done = true;
+    PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 90 });
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { link.classList.add('ready'); });
+    });
   }
 
+  /* Wait for the webfont so the wordmark has its final size before
+     we measure it — otherwise the avoid-box would be wrong. */
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(place).catch(place);
+    document.fonts.ready.then(placeOnce).catch(placeOnce);
+    setTimeout(placeOnce, 1500);   /* fallback only; no-op if already placed */
   } else {
-    window.addEventListener('load', place);
+    window.addEventListener('load', placeOnce);
+    setTimeout(placeOnce, 800);
   }
-  setTimeout(place, 400);
 
+  /* Reposition only if the window is actually resized. */
   var t = null;
   window.addEventListener('resize', function () {
     clearTimeout(t);
-    t = setTimeout(place, 200);
+    t = setTimeout(function () {
+      if (window.PS) PS.placeRandom(link, { avoid: [name], marginX: 0.09, marginY: 0.11, pad: 90 });
+    }, 220);
   });
 })();
 </script>

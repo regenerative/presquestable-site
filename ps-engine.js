@@ -59,9 +59,9 @@
     return [hue2rgb(p, q, h + 1 / 3) * 255, hue2rgb(p, q, h) * 255, hue2rgb(p, q, h - 1 / 3) * 255];
   }
 
-  /* Anchored palette: coral -> amber -> teal -> blue -> violet -> magenta.
-     Nods to the logo red rather than sweeping the whole wheel. */
-  var PALETTE = [6, 27, 45, 186, 209, 256, 322];
+  /* Cold palette: teal -> cyan -> steel -> blue -> indigo -> cold violet.
+     Never crosses into warm territory. */
+  var PALETTE = [172, 186, 197, 208, 217, 228, 246, 262];
   var ANCHOR_MS = REDUCED ? 420000 : 170000;   /* full loop ~20 min */
   function baseHue(t) {
     var p = t / ANCHOR_MS;
@@ -72,11 +72,12 @@
     return (a + d * smoothstep(p - Math.floor(p)) + 360) % 360;
   }
 
-  /* ---------- morphing noise texture ---------- */
-  var NW = 96, NH = 54, nCanvas = null, nCtx = null, nImg = null;
+  /* ---------- LAYER 1: morphing cloud texture (large scale) ----------
+     Ridged turbulence gives visible veining instead of a flat gradient. */
+  var NW = 176, NH = 99, nCanvas = null, nCtx = null, nImg = null;
 
   function initNoise() {
-    NH = Math.max(36, Math.round(NW * (H / Math.max(1, W))));
+    NH = Math.max(64, Math.round(NW * (H / Math.max(1, W))));
     nCanvas = document.createElement('canvas');
     nCanvas.width = NW; nCanvas.height = NH;
     nCtx = nCanvas.getContext('2d');
@@ -90,26 +91,39 @@
     if (!nImg) return;
     var d = nImg.data, k = 0;
     var hue = baseHue(time);
-    var c1 = hsl2rgb(hue, 0.55, 0.55);
-    var c2 = hsl2rgb(hue + 58, 0.50, 0.52);
+    var c1 = hsl2rgb(hue - 8, 0.42, 0.58);
+    var c2 = hsl2rgb(hue + 30, 0.38, 0.54);
     var zs = REDUCED ? 0.35 : 1;
-    var z1 = time * 0.000042 * zs;
-    var z2 = time * 0.000029 * zs + 37;
-    var dx = time * 0.0000060 * zs;
-    var dy = time * 0.0000038 * zs;
+    var z1 = time * 0.000040 * zs;
+    var z2 = time * 0.000027 * zs + 37;
+    var z3 = time * 0.000063 * zs + 91;
+    var dx = time * 0.0000058 * zs;
+    var dy = time * 0.0000036 * zs;
+
     for (var y = 0; y < NH; y++) {
-      var ny = (y / NH) * 3.1 + dy;
+      var ny = (y / NH) * 3.4 + dy;
       for (var x = 0; x < NW; x++) {
-        var nx = (x / NW) * 4.4 + dx;
+        var nx = (x / NW) * 4.8 + dx;
+
         var a = fbm(nx, ny, z1, 3);
-        var b = fbm(nx * 1.85 + 4.7, ny * 1.85 - 3.1, z2, 2);
-        var v = a * 0.62 + b * 0.38;
-        v = (v - 0.34) / 0.52;
+        var b = fbm(nx * 1.9 + 4.7, ny * 1.9 - 3.1, z2, 2);
+
+        /* ridged: folds the field so it forms veins, not blobs */
+        var r = 1 - Math.abs(vnoise(nx * 3.3 + 11.2, ny * 3.3 - 7.4, z3) * 2 - 1);
+        r = r * r;
+
+        var v = a * 0.46 + b * 0.26 + r * 0.28;
+
+        /* hard contrast window — this is what makes it read as texture */
+        v = (v - 0.40) / 0.30;
         v = v < 0 ? 0 : (v > 1 ? 1 : v);
-        v = v * v * 0.30;
-        d[k++] = (c1[0] + (c2[0] - c1[0]) * b) * v;
-        d[k++] = (c1[1] + (c2[1] - c1[1]) * b) * v;
-        d[k++] = (c1[2] + (c2[2] - c1[2]) * b) * v;
+        v = v * v * (3 - 2 * v);
+        v *= 0.52;
+
+        var mix = b * 0.6 + r * 0.4;
+        d[k++] = (c1[0] + (c2[0] - c1[0]) * mix) * v;
+        d[k++] = (c1[1] + (c2[1] - c1[1]) * mix) * v;
+        d[k++] = (c1[2] + (c2[2] - c1[2]) * mix) * v;
         k++;
       }
     }
@@ -120,16 +134,78 @@
     if (!nCanvas) return;
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = 0.92;
     ctx.imageSmoothingEnabled = true;
     if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+    ctx.globalAlpha = 0.95;
     ctx.drawImage(nCanvas, 0, 0, W, H);
+    /* second pass at 2.1x, offset — adds mid-frequency detail */
+    ctx.globalAlpha = 0.30;
+    ctx.drawImage(nCanvas, -W * 0.28, -H * 0.22, W * 2.1, H * 2.1);
+    ctx.restore();
+  }
+
+  /* ---------- LAYER 2: film grain tile (pixel scale) ----------
+     Three pre-rendered tiles cycled + drifted on integer pixels, so the
+     surface shimmers like film stock and never resamples to mush. */
+  var TILE = 220, grainTiles = [], tileIdx = 0;
+
+  function buildGrainTiles() {
+    grainTiles = [];
+    for (var t = 0; t < 3; t++) {
+      var c = document.createElement('canvas');
+      c.width = TILE; c.height = TILE;
+      var g = c.getContext('2d');
+      var img = g.createImageData(TILE, TILE);
+      var d = img.data, k = 0;
+      for (var y = 0; y < TILE; y++) {
+        for (var x = 0; x < TILE; x++) {
+          /* clumping mask stops it looking like TV static */
+          var clump = vnoise(x * 0.075, y * 0.075, t * 13.7) * 0.55 +
+                      vnoise(x * 0.21, y * 0.21, t * 5.3 + 2) * 0.45;
+          var w = Math.random();
+          var v = w * (0.30 + clump * 0.95);
+          v = v * v * v;
+          var lum = v * 132;
+          d[k++] = lum * 0.86;
+          d[k++] = lum * 0.96;
+          d[k++] = lum;          /* cool-biased grain */
+          d[k++] = 255;
+        }
+      }
+      g.putImageData(img, 0, 0);
+      grainTiles.push(c);
+    }
+  }
+
+  function drawGrainTile(time) {
+    if (!grainTiles.length) return;
+    var tile = grainTiles[tileIdx];
+    var ox = -((Math.round(time * 0.009) % TILE) + TILE) % TILE;
+    var oy = -((Math.round(time * 0.006) % TILE) + TILE) % TILE;
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = REDUCED ? 0.22 : 0.40;
+    ctx.imageSmoothingEnabled = false;
+    for (var x = ox; x < W; x += TILE) {
+      for (var y = oy; y < H; y += TILE) ctx.drawImage(tile, x, y);
+    }
+    ctx.restore();
+  }
+
+  /* ---------- LAYER 3: fine striation ---------- */
+  function drawStriation(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = 0.030;
+    ctx.fillStyle = 'rgb(150,182,196)';
+    var off = (time * 0.0035) % 3;
+    for (var y = off; y < H; y += 3) ctx.fillRect(0, y, W, 1);
     ctx.restore();
   }
 
   /* ---------- drifting colour washes ---------- */
   function ColorWash(seed) {
-    this.hueOffset = seed * 46 + 12;
+    this.hueOffset = (seed % 4) * 15 - 22;   /* stays inside the cold band */
     this.radius = Math.max(W, H) * (0.34 + (seed % 4) * 0.13);
     this.orbitR = Math.min(W, H) * (0.16 + (seed % 3) * 0.17);
     this.orbitSpeed = (0.000034 + (seed % 5) * 0.000017) * (REDUCED ? 0.3 : 1);
@@ -183,7 +259,7 @@
     this.points = [];
     this.maxPoints = 720;
     this.lineWidth = 0.85 + (i % 3) * 0.28;
-    this.hueOffset = i * 51 + 15;
+    this.hueOffset = i * 11 - 18;
     this.cur = this.randParams(this.seed);
     this.tgt = this.randParams(this.seed + 13);
     this.morphEvery = 26000 + i * 5200;
@@ -337,10 +413,10 @@
     }
   }
   function drawGrain(time) {
-    ctx.fillStyle = 'rgb(226,236,238)';
+    ctx.fillStyle = 'rgb(214,232,238)';
     for (var i = 0; i < grain.length; i++) {
       var p = grain[i];
-      ctx.globalAlpha = p.a * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * p.sp + p.ph)));
+      ctx.globalAlpha = p.a * 0.55 * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * p.sp + p.ph)));
       ctx.fillRect(p.x, p.y, 1, 1);
     }
     ctx.globalAlpha = 1;
@@ -350,8 +426,8 @@
   function drawBackdrop(t) {
     var hue = baseHue(t);
     var g = ctx.createRadialGradient(W * 0.5, H * 0.46, 0, W * 0.5, H * 0.46, Math.max(W, H) * 0.78);
-    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 42%, 15%, 0.055)');
-    g.addColorStop(1, 'hsla(' + ((hue + 46) % 360).toFixed(1) + ', 44%, 4%, 0.055)');
+    g.addColorStop(0, 'hsla(' + hue.toFixed(1) + ', 38%, 15%, 0.055)');
+    g.addColorStop(1, 'hsla(' + ((hue + 24) % 360).toFixed(1) + ', 40%, 4%, 0.055)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -369,6 +445,7 @@
     ctx.fillStyle = '#05070a';
     ctx.fillRect(0, 0, W, H);
     initNoise();
+    if (!grainTiles.length) buildGrainTiles();
     initWashes();
     initTraces();
     initGrain();
@@ -394,8 +471,11 @@
     for (var i = 0; i < washes.length; i++) washes[i].draw(time);
     for (var j = 0; j < traces.length; j++) { traces[j].update(time, dt); traces[j].draw(time); }
 
-    if (frame % 4 === 0) renderNoise(time);
+    if (frame % 5 === 0) renderNoise(time);
     drawNoise();
+    drawStriation(time);
+    if (frame % 3 === 0) tileIdx = (tileIdx + 1) % grainTiles.length;
+    drawGrainTile(time);
     if (frame % 2 === 0) drawGrain(time);
 
     frame++;

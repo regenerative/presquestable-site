@@ -49,9 +49,9 @@ html, body {
   line-height: 0.94;
   letter-spacing: 0.005em;
   text-transform: lowercase;
-  color: #f2ece6;
+  color: #e8eff2;
   opacity: 0.95;
-  text-shadow: 0 0 34px rgba(150, 180, 195, 0.22);
+  text-shadow: 0 0 34px rgba(140, 175, 196, 0.24);
 }
 
 /* ---- subtle clickable element ---- */
